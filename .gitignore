@@ -1,0 +1,21 @@
+# လျှို့ဝှက်ချက်များ (API Keys, DB Passwords)
+.env
+
+# Python နဲ့ဆိုင်တဲ့ မလိုအပ်တဲ့ ဖိုင်များ
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS နဲ့ဆိုင်တဲ့ ဖိုင်များ
+.DS_Store
+Thumbs.db
+
+# IDE (VS Code, PyCharm) နဲ့ဆိုင်တဲ့ ဖိုင်များ
+.vscode/
+.idea/
