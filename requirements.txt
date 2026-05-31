@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+gunicorn
+httpx
+groq
+asyncpg
+python-dotenv
+pydantic-settings
+pydantic
+python-multipart
+certifi
