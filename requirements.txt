@@ -9,3 +9,4 @@ pydantic-settings
 pydantic
 python-multipart
 certifi
+PyJWT
