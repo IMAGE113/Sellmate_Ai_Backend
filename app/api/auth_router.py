@@ -12,8 +12,7 @@ from app.db.database import get_db_pool
 from app.services.auth import AuthService
 from app.services.id_generator import validate_shop_id, get_business_by_shop_id
 
-router = APIRouter(prefix="/api/auth", tags=["authentication"])
-
+router = APIRouter(tags=["authentication"])
 # Request/Response Models
 class RegisterRequest(BaseModel):
     shop_name: str = Field(..., min_length=1, max_length=100)
