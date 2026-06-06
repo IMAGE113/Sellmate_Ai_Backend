@@ -101,7 +101,7 @@ class AuthService:
         owner_name: str,
         phone: str,
         password: str,
-        category: str = "general"
+        requirements: str = ""
     ) -> Tuple[bool, Dict]:
         """
         Register a new merchant with auto-generated shop_id.
@@ -112,7 +112,7 @@ class AuthService:
             owner_name: Owner's full name
             phone: Owner's phone number
             password: Login password
-            category: Shop category
+            requirements: Merchant custom requirements/instructions (raw text)
             
         Returns:
             tuple: (success: bool, response: dict)
@@ -137,10 +137,10 @@ class AuthService:
                 # Insert new business
                 row = await conn.fetchrow("""
                     INSERT INTO businesses 
-                    (shop_id, name, owner_name, phone, password_hash, category, created_at)
+                    (shop_id, name, owner_name, phone, password_hash, requirements_text, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6, NOW())
-                    RETURNING id, shop_id, name, owner_name, phone, category
-                """, shop_id, shop_name, owner_name, phone, password_hash, category)
+                    RETURNING id, shop_id, name, owner_name, phone, requirements_text
+                """, shop_id, shop_name, owner_name, phone, password_hash, requirements)
                 
                 if row:
                     return True, {
@@ -151,7 +151,7 @@ class AuthService:
                         "shop_name": row["name"],
                         "owner_name": row["owner_name"],
                         "phone": row["phone"],
-                        "category": row["category"]
+                        "requirements": row["requirements_text"] or ""
                     }
                 else:
                     return False, {"error": "Failed to create business"}
@@ -180,7 +180,7 @@ class AuthService:
             async with pool.acquire() as conn:
                 # Fetch merchant by phone
                 business = await conn.fetchrow(
-                    "SELECT id, shop_id, name, owner_name, phone, password_hash, category, status FROM businesses WHERE phone = $1",
+                    "SELECT id, shop_id, name, owner_name, phone, password_hash, requirements_text, status FROM businesses WHERE phone = $1",
                     phone
                 )
                 
@@ -216,7 +216,7 @@ class AuthService:
                     "business_id": business["id"],
                     "shop_name": business["name"],
                     "owner_name": business["owner_name"],
-                    "category": business["category"]
+                    "requirements": business["requirements_text"] or ""
                 }
                 
         except Exception as e:
@@ -237,9 +237,18 @@ class AuthService:
         try:
             async with pool.acquire() as conn:
                 merchant = await conn.fetchrow(
-                    "SELECT id, shop_id, name, owner_name, phone, category FROM businesses WHERE shop_id = $1",
+                    "SELECT id, shop_id, name, owner_name, phone, requirements_text FROM businesses WHERE shop_id = $1",
                     shop_id
                 )
-                return dict(merchant) if merchant else None
+                if merchant:
+                    return {
+                        "id": merchant["id"],
+                        "shop_id": merchant["shop_id"],
+                        "name": merchant["name"],
+                        "owner_name": merchant["owner_name"],
+                        "phone": merchant["phone"],
+                        "requirements": merchant["requirements_text"] or ""
+                    }
+                return None
         except Exception:
             return None
