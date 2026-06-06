@@ -97,3 +97,4 @@ async def health():
     except Exception as e:
         logging.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
+
