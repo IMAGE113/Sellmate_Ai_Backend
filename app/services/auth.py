@@ -96,18 +96,12 @@ class AuthService:
     
     @staticmethod
     async def register_merchant(
-
-    pool: asyncpg.Pool,
-
-    shop_name: str,
-
-    owner_name: str,
-
-    phone: str,
-
-    password: str,
-
-    requirements: str = ""
+        pool: asyncpg.Pool,
+        shop_name: str,
+        owner_name: str,
+        phone: str,
+        password: str,
+        category: str = "general"
     ) -> Tuple[bool, Dict]:
         """
         Register a new merchant with auto-generated shop_id.
