@@ -12,7 +12,7 @@ from app.db.database import get_db_pool
 from app.services.auth import AuthService
 from app.services.id_generator import validate_shop_id, get_business_by_shop_id
 
-router = APIRouter(prefix="/api/auth", tags=["authentication"])
+router = APIRouter(tags=["authentication"])
 
 # Request/Response Models
 class RegisterRequest(BaseModel):
@@ -226,7 +226,7 @@ async def update_merchant_requirements(shop_id: str, requirements: str, current_
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE businesses SET requirements=$1 WHERE shop_id=$2",
+                "UPDATE businesses SET requirements_text=$1 WHERE shop_id=$2",
                 requirements, shop_id
             )
         
