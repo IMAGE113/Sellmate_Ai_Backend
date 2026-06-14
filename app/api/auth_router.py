@@ -130,7 +130,7 @@ async def login(request: LoginRequest):
         pool = await get_db_pool()
         success, response = await AuthService.login_merchant(
             pool,
-            request.phone,
+            request.shop_id,
             request.password
         )
         
