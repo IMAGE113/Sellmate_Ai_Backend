@@ -162,30 +162,23 @@ class AuthService:
     @staticmethod
     async def login_merchant(
         pool: asyncpg.Pool,
-        phone: str,
+        shop_id: str,        # 👈 ပြင်ရန်: phone နေရာမှာ shop_id ပြောင်းလိုက်တယ်
         password: str
     ) -> Tuple[bool, Dict]:
         """
-        Authenticate merchant with phone and password.
-        
-        Args:
-            pool: AsyncPG connection pool
-            phone: Merchant phone number
-            password: Login password
-            
-        Returns:
-            tuple: (success: bool, response: dict)
+        Authenticate merchant with shop_id and password.
         """
         try:
             async with pool.acquire() as conn:
-                # Fetch merchant by phone
+                # 👈 ပြင်ရန်: WHERE phone = $1 နေရာမှာ WHERE shop_id = $1 နဲ့ ပြောင်းရှာခိုင်းတာ Bro
                 business = await conn.fetchrow(
-                    "SELECT id, shop_id, name, owner_name, phone, password_hash, requirements_text, status FROM businesses WHERE phone = $1",
-                    phone
+                    "SELECT id, shop_id, name, owner_name, phone, password_hash, requirements_text, status FROM businesses WHERE shop_id = $1",
+                    shop_id
                 )
                 
+                # 👈 ပြင်ရန်: Return Error Message ကို Shop ID ပုံစံ ညှိလိုက်တယ်
                 if not business:
-                    return False, {"error": "Invalid phone or password"}
+                    return False, {"error": "Invalid Shop ID or password"}
                 
                 if business["status"] == "SUSPENDED":
                     return False, {"error": "Account is suspended"}
