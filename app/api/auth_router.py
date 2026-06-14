@@ -23,7 +23,7 @@ class RegisterRequest(BaseModel):
     requirements: str = Field(default="", description="Raw text merchant custom requirements/instructions")
 
 class LoginRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=20)
+    shop_id: str = Field(..., min_length=5, max_length=20)
     password: str = Field(..., min_length=6)
 
 class RegisterResponse(BaseModel):
