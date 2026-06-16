@@ -1,4 +1,5 @@
 import json
+import httpx  # Webhook လှမ်းခေါ်ဖို့အတွက် သေချာပေါက် ပါရမယ်
 from typing import Dict, Any, List, Optional
 from app.db.database import BaseRepository
 
@@ -49,7 +50,7 @@ class DashboardRepository(BaseRepository):
         """
         return await self.fetch_one(query, self.shop_id)
 
-    # ✅ [နဂိုတိုင်း Fallback + Fixed] workflow_config ကို နဂိုအတိုင်းထားပြီး ဒေတာဘေ့စ်ရဲ့ tg_bot_token အစစ်ကို ဆွဲထုတ်ပေးမယ်
+    # ✅ Merchant Profile ကို ဆွဲထုတ်ပေးတဲ့အပိုင်း (workflow_config ကို နဂိုအတိုင်းထားတယ်)
     async def get_merchant_profile(self) -> Optional[Dict[str, Any]]:
         query = """
             SELECT id, shop_id, name, owner_name, phone, category, status, tg_bot_token, workflow_config, created_at 
@@ -61,13 +62,10 @@ class DashboardRepository(BaseRepository):
             return None
             
         res = dict(row)
-        
-        # ဒေတာဘေ့စ်ရဲ့ tg_bot_token ကွက်လပ်ထဲက Token အစစ်ကို ယူမယ်
         db_bot_token = res.get("tg_bot_token")
         res["bot_token"] = db_bot_token if db_bot_token else ""
-        res["bot_username"] = ""  # Frontend UI အလုပ်လုပ်ဖို့ default ထားပေးမယ်
+        res["bot_username"] = ""
 
-        # workflow_config ကို နဂိုအတိုင်းပဲ သီးသန့်ဖတ်မယ် (မရောတော့ဘူး)
         config = res.get("workflow_config")
         if config:
             if isinstance(config, str):
@@ -80,20 +78,38 @@ class DashboardRepository(BaseRepository):
                 
         return res
 
-    # ✅ [ကွက်တိ FIX] workflow_config ကို လုံးဝမထိတော့ဘဲ tg_bot_token Column ထဲကိုပဲ သီးသန့် ကွက်တိ UPDATE လုပ်ပေးမယ် Bro
+    # ✅ [AUTOMATED MULTI-TENANT WEBHOOK FIX] Token သိမ်းပြီးတာနဲ့ သက်ဆိုင်ရာ /webhook/{shop_id} ဆီ အလိုအလျောက် Webhook ချိတ်ပေးမယ် ကောင်ကြီး
     async def update_merchant_settings(self, settings: Dict[str, Any]):
-        # Frontend က ပို့လိုက်တဲ့ settings ထဲက bot_token ကိုပဲ ဆွဲထုတ်မယ်
         bot_token = settings.get("bot_token")
         
+        # ၁။ အရင်ဆုံး ဒေတာဘေ့စ်ရဲ့ tg_bot_token ထဲ ကွက်တိ သွားသိမ်းမယ်
         query = """
             UPDATE businesses 
             SET tg_bot_token = $1,
                 updated_at = NOW() 
             WHERE shop_id = $2
         """
-        # database pool ရဲ့ connection ကို သုံးပြီး execute လုပ်မယ်
         async with self.pool.acquire() as conn:
             await conn.execute(query, bot_token, self.shop_id)
+            
+        # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
+        if bot_token:
+            # 💡 မင်းရဲ့ webhook.py လမ်းကြောင်းအတိုင်း /webhook/{shop_id} ကို dynamic ချိတ်ပေးလိုက်တယ်
+            webhook_url = f"https://sellmate-ai-backend.onrender.com/webhook/{self.shop_id}"
+            telegram_url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
+            
+            try:
+                # httpx client သုံးပြီး Telegram API ဆီ Request ပို့မယ်
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(telegram_url, params={"url": webhook_url})
+                    res_data = response.json()
+                    
+                    if res_data.get("ok"):
+                        print(f"✅ Webhook set successfully for shop_id: {self.shop_id} to {webhook_url}")
+                    else:
+                        print(f"❌ Telegram Webhook Config Failed: {res_data.get('description')}")
+            except Exception as e:
+                print(f"⚠️ Error occurred while automating webhook: {str(e)}")
 
 class DashboardService:
     def __init__(self, dashboard_repo: DashboardRepository):
