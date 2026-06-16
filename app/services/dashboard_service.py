@@ -49,7 +49,7 @@ class DashboardRepository(BaseRepository):
         """
         return await self.fetch_one(query, self.shop_id)
 
-    # ✅ Profile ခေါ်တဲ့အခါ workflow_config ထဲက bot_token နဲ့ bot_username ကို ခွဲထုတ်ပြီး Frontend က နားလည်အောင် Object အပြားလိုက် ပြန်ပေးဖို့ ပြင်ထားတယ် Bro
+    # ✅ [နဂိုတိုင်း Fallback + Fixed] workflow_config ကို နဂိုအတိုင်းထားပြီး ဒေတာဘေ့စ်ရဲ့ tg_bot_token အစစ်ကို ဆွဲထုတ်ပေးမယ်
     async def get_merchant_profile(self) -> Optional[Dict[str, Any]]:
         query = """
             SELECT id, shop_id, name, owner_name, phone, category, status, tg_bot_token, workflow_config, created_at 
@@ -61,7 +61,13 @@ class DashboardRepository(BaseRepository):
             return None
             
         res = dict(row)
-        # workflow_config ထဲမှာ Bot Data တွေ ရှိရင် အပြင်ထုတ်ပေးမယ်
+        
+        # ဒေတာဘေ့စ်ရဲ့ tg_bot_token ကွက်လပ်ထဲက Token အစစ်ကို ယူမယ်
+        db_bot_token = res.get("tg_bot_token")
+        res["bot_token"] = db_bot_token if db_bot_token else ""
+        res["bot_username"] = ""  # Frontend UI အလုပ်လုပ်ဖို့ default ထားပေးမယ်
+
+        # workflow_config ကို နဂိုအတိုင်းပဲ သီးသန့်ဖတ်မယ် (မရောတော့ဘူး)
         config = res.get("workflow_config")
         if config:
             if isinstance(config, str):
@@ -70,21 +76,24 @@ class DashboardRepository(BaseRepository):
                 except:
                     config = {}
             if isinstance(config, dict):
-                res["bot_token"] = config.get("bot_token", "")
                 res["bot_username"] = config.get("bot_username", "")
+                
         return res
 
-    # ✅ [FIXED QUERY] Postgres ရဲ့ jsonb || operation နဲ့ ကိုက်ညီအောင် $1::jsonb လို့ အသေအချာ Cast လုပ်ပြီး အမှားမရှိ သိမ်းပေးမယ် Bro
+    # ✅ [ကွက်တိ FIX] workflow_config ကို လုံးဝမထိတော့ဘဲ tg_bot_token Column ထဲကိုပဲ သီးသန့် ကွက်တိ UPDATE လုပ်ပေးမယ် Bro
     async def update_merchant_settings(self, settings: Dict[str, Any]):
+        # Frontend က ပို့လိုက်တဲ့ settings ထဲက bot_token ကိုပဲ ဆွဲထုတ်မယ်
+        bot_token = settings.get("bot_token")
+        
         query = """
             UPDATE businesses 
-            SET workflow_config = COALESCE(workflow_config, '{}'::jsonb) || $1::jsonb, 
+            SET tg_bot_token = $1,
                 updated_at = NOW() 
             WHERE shop_id = $2
         """
         # database pool ရဲ့ connection ကို သုံးပြီး execute လုပ်မယ်
         async with self.pool.acquire() as conn:
-            await conn.execute(query, json.dumps(settings), self.shop_id)
+            await conn.execute(query, bot_token, self.shop_id)
 
 class DashboardService:
     def __init__(self, dashboard_repo: DashboardRepository):
