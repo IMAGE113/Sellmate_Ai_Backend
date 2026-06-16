@@ -1,9 +1,9 @@
-from typing import Dict, Any, List
+import json
+from typing import Dict, Any, List, Optional
 from app.db.database import BaseRepository
 
 class DashboardRepository(BaseRepository):
     async def get_order_stats(self) -> Dict[str, Any]:
-        # Optimized with indexes on shop_id and status
         query = """
             SELECT 
                 COUNT(*) FILTER (WHERE status = 'PAYMENT_PENDING_REVIEW') as pending_payments,
@@ -17,7 +17,6 @@ class DashboardRepository(BaseRepository):
         return await self.fetch_one(query, self.shop_id)
 
     async def get_recent_orders(self, limit: int = 10, offset: int = 0, status: str = None) -> List[Dict[str, Any]]:
-        # Indexed query with pagination
         params = [self.shop_id, limit, offset]
         query = """
             SELECT id, chat_id, customer_name, total_price, status, created_at
@@ -50,13 +49,42 @@ class DashboardRepository(BaseRepository):
         """
         return await self.fetch_one(query, self.shop_id)
 
+    # ✅ Profile ခေါ်တဲ့အခါ workflow_config ထဲက bot_token နဲ့ bot_username ကို ခွဲထုတ်ပြီး Frontend က နားလည်အောင် Object အပြားလိုက် ပြန်ပေးဖို့ ပြင်ထားတယ် Bro
     async def get_merchant_profile(self) -> Optional[Dict[str, Any]]:
-        query = "SELECT id, shop_id, name, owner_name, phone, category, status, tg_bot_token, workflow_config, created_at FROM businesses WHERE shop_id = $1"
-        return await self.fetch_one(query, self.shop_id)
+        query = """
+            SELECT id, shop_id, name, owner_name, phone, category, status, tg_bot_token, workflow_config, created_at 
+            FROM businesses 
+            WHERE shop_id = $1
+        """
+        row = await self.fetch_one(query, self.shop_id)
+        if not row:
+            return None
+            
+        res = dict(row)
+        # workflow_config ထဲမှာ Bot Data တွေ ရှိရင် အပြင်ထုတ်ပေးမယ်
+        config = res.get("workflow_config")
+        if config:
+            if isinstance(config, str):
+                try:
+                    config = json.loads(config)
+                except:
+                    config = {}
+            if isinstance(config, dict):
+                res["bot_token"] = config.get("bot_token", "")
+                res["bot_username"] = config.get("bot_username", "")
+        return res
 
+    # ✅ [FIXED QUERY] Postgres ရဲ့ jsonb || operation နဲ့ ကိုက်ညီအောင် $1::jsonb လို့ အသေအချာ Cast လုပ်ပြီး အမှားမရှိ သိမ်းပေးမယ် Bro
     async def update_merchant_settings(self, settings: Dict[str, Any]):
-        query = "UPDATE businesses SET workflow_config = workflow_config || $1, updated_at = NOW() WHERE shop_id = $2"
-        await self.execute(query, json.dumps(settings), self.shop_id)
+        query = """
+            UPDATE businesses 
+            SET workflow_config = COALESCE(workflow_config, '{}'::jsonb) || $1::jsonb, 
+                updated_at = NOW() 
+            WHERE shop_id = $2
+        """
+        # database pool ရဲ့ connection ကို သုံးပြီး execute လုပ်မယ်
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, json.dumps(settings), self.shop_id)
 
 class DashboardService:
     def __init__(self, dashboard_repo: DashboardRepository):
