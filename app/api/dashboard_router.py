@@ -32,7 +32,7 @@ async def get_order_details(order_id: int, current_merchant = Depends(get_curren
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-# ✅ [GET PRODUCTS FIX] DB ထဲက Column တွေနဲ့ ကိုက်အောင် SQL ကို ညှိပြီး တိုက်ရိုက်ထုတ်ပေးထားတယ် Bro
+# ✅ [GET PRODUCTS] DB ထဲက Column တွေနဲ့ ကိုက်အောင် SQL ကို ညှိပြီး တိုက်ရိုက်ထုတ်ပေးထားတယ် Bro
 @router.get("/products")
 async def get_products(current_merchant = Depends(get_current_merchant)):
     pool = await get_db_pool()
@@ -52,7 +52,7 @@ async def get_products(current_merchant = Depends(get_current_merchant)):
         )
         return [dict(row) for row in rows]
 
-# ✅ [POST PRODUCT FIX] မင်းရဲ့ Neon DB ထဲက Column အစစ်တွေဖြစ်တဲ့ (name, price, stock, is_active) ထဲ ကွက်တိ ထည့်ပေးမှာဖြစ်လို့ အာမခံတယ် Bro
+# ✅ [POST PRODUCT] မင်းရဲ့ Neon DB ထဲက Column အစစ်တွေဖြစ်တဲ့ (name, price, stock, is_active) ထဲ ကွက်တိ ထည့်ပေးမှာဖြစ်လို့ အာမခံတယ် Bro
 @router.post("/products")
 async def create_product(product_data: dict, current_merchant = Depends(get_current_merchant)):
     pool = await get_db_pool()
@@ -103,6 +103,7 @@ async def get_profile(current_merchant = Depends(get_current_merchant)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+# ✅ [SETTINGS UPDATE] Frontend က ပို့လိုက်တဲ့ bot_token တွေကို လက်ခံပြီး Service ထံ လွှဲပေးမယ်
 @router.post("/settings")
 async def update_settings(settings: dict, current_merchant = Depends(get_current_merchant)):
     pool = await get_db_pool()
