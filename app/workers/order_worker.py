@@ -2,6 +2,8 @@ import asyncio
 import logging
 import json
 import os
+from decimal import Decimal
+from typing import Any
 from app.db.database import get_db_pool, OrderRepository, MerchantRepository, AuditRepository
 from app.services.ai import ai
 from app.services.order_service import OrderService
@@ -11,6 +13,34 @@ from app.services.lock_manager import LockRepository, LockManager
 from app.services.queue_manager import QueueRepository, QueueManager
 from app.services.rate_limiter import rate_limiter
 from app.services.lifecycle_service import LifecycleService, LifecycleRepository
+
+# ==========================================
+# 🛡️ [SAFE UTILITIES] ဘာဒေတာပဲလာလာ Error မတက်အောင် ကြိုတင်သန့်စင်ပေးမယ့် Functions
+# ==========================================
+def make_json_safe(data: Any) -> Any:
+    """ Decimal တွေကို float အဖြစ် အလိုအလျောက် ပြောင်းပေးတဲ့ စနစ် """
+    if isinstance(data, list):
+        return [make_json_safe(item) for item in data]
+    if isinstance(data, dict):
+        return {k: make_json_safe(v) for k, v in data.items()}
+    if isinstance(data, Decimal):
+        return float(data)
+    return data
+
+def force_dict(data: Any) -> dict:
+    """ Database က String သို့မဟုတ် None ထွက်လာရင်တောင် dict ဖြစ်အောင် အတင်းပြောင်းပေးမယ့် စနစ် """
+    if not data:
+        return {}
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+            return parsed if isinstance(parsed, dict) else {}
+        except:
+            return {}
+    return {}
+# ==========================================
 
 async def run_worker():
     pool = await get_db_pool()
@@ -73,11 +103,18 @@ async def run_worker():
                     continue
 
                 # 5. Fetch/Create Order
-                order = await order_service.get_or_create_active_order(chat_id, biz["id"])
+                order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"])
+                
+                # 🛡️ [SAFE FIX 1] Order ရဲ့ extracted_data က String ဖြစ်နေရင် dict ဖြစ်အောင် အတင်းပြောင်းလိုက်မယ်
+                order = dict(order_raw) if order_raw else {}
+                order["extracted_data"] = force_dict(order.get("extracted_data", {}))
                 
                 # 6. Fetch Menu
                 menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
-                menu = [dict(m) for m in menu_rows]
+                menu_raw = [dict(m) for m in menu_rows]
+                
+                # 🛡️ [SAFE FIX 2] Menu ထဲက Decimal စျေးနှုန်းတွေကို အလိုအလျောက် JSON Safe ဖြစ်အောင် float ပြောင်းပေးမယ်
+                menu = make_json_safe(menu_raw)
 
                 # 7. AI Extraction
                 extracted_json = await ai.extract_data(
@@ -87,7 +124,9 @@ async def run_worker():
                     order.get("extracted_data", {}),
                     biz.get("requirements_text")
                 )
-                extracted_data = json.loads(extracted_json)
+                
+                # 🛡️ [SAFE FIX 3] AI ဆီက ပြန်လာတဲ့ Json ကို loads လုပ်ပြီး ဒေတာသန့်စင်မယ်
+                extracted_data = force_dict(json.loads(extracted_json) if isinstance(extracted_json, str) else extracted_json)
                 
                 # 8. Merge Data & Update Order
                 new_extracted_data = ai.merge_data(order.get("extracted_data", {}), extracted_data)
