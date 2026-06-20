@@ -63,15 +63,20 @@ class ConversationOrchestrator:
             "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
             json.dumps(new_extracted_data), order["id"]
         )
-        # Orchestrator.py (Step 6 & 7 ကြား)
-        print(f"DEBUG: Current order_data payment_method -> {new_extracted_data.get('payment_method')}")
-        print(f"DEBUG: Status Key Result -> {status_key}")
+        
+        # DEBUG: Data အဝင်ကို စစ်မယ်
+        print(f"DEBUG_DATA: {new_extracted_data}")
+
         # 7. Workflow Resolution
         intent = extracted_data.get("intent", "ORDER")
         flow = FlowManager(biz, new_extracted_data)
         status_key = flow.get_next_step(intent)
         
+        # DEBUG: ဘယ် state ထွက်လဲ စစ်မယ်
+        print(f"DEBUG_STATUS: {status_key}")
+        
         # 8. Scripted Response Building
+        # ... (ကျန်တာတွေ အတိုင်းပဲ)
         script_service = ScriptService(self.script_repo)
         response_text = await script_service.get_script(status_key, shop_name=biz["name"])
         
