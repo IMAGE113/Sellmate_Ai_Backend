@@ -63,7 +63,9 @@ class ConversationOrchestrator:
             "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
             json.dumps(new_extracted_data), order["id"]
         )
-        
+        # Orchestrator.py (Step 6 & 7 ကြား)
+        print(f"DEBUG: Current order_data payment_method -> {new_extracted_data.get('payment_method')}")
+        print(f"DEBUG: Status Key Result -> {status_key}")
         # 7. Workflow Resolution
         intent = extracted_data.get("intent", "ORDER")
         flow = FlowManager(biz, new_extracted_data)
