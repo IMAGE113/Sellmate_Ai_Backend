@@ -4,14 +4,14 @@ from app.db.database import OrderRepository, AuditRepository
 class OrderService:
     # Define strict state transitions
     VALID_TRANSITIONS = {
-        'NEW_CHAT': ['COLLECTING_INFO', 'CANCELLED'],
-        'COLLECTING_INFO': ['WAITING_PAYMENT', 'CANCELLED'],
-        'WAITING_PAYMENT': ['PAYMENT_PENDING_REVIEW', 'CANCELLED'],
+        'NEW_CHAT': ['COLLECTING_INFO', 'WAITING_PAYMENT', 'PAYMENT_CONFIRMED', 'CANCELLED'],
+        'COLLECTING_INFO': ['COLLECTING_INFO', 'WAITING_PAYMENT', 'PAYMENT_CONFIRMED', 'CANCELLED'],
+        'WAITING_PAYMENT': ['WAITING_PAYMENT', 'PAYMENT_PENDING_REVIEW', 'PAYMENT_CONFIRMED', 'CANCELLED'],
         'PAYMENT_PENDING_REVIEW': ['PAYMENT_CONFIRMED', 'WAITING_PAYMENT', 'CANCELLED'],
         'PAYMENT_CONFIRMED': ['READY_TO_SHIP', 'CANCELLED'],
         'READY_TO_SHIP': ['COMPLETED', 'CANCELLED'],
         'COMPLETED': [],
-        'CANCELLED': ['NEW_CHAT'] # Allow restart
+        'CANCELLED': ['NEW_CHAT', 'COLLECTING_INFO'] # Allow restart
     }
 
     def __init__(self, order_repo: OrderRepository, audit_repo: AuditRepository):

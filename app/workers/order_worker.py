@@ -144,49 +144,52 @@ async def run_worker():
                 status_key = flow.get_next_step(intent)
                 
                 # 10. Handle Intent/Status Actions and Synchronize workflow status with order status
-                if status_key == "HUMAN_TAKEOVER":
-                    await merchant_repo.execute("UPDATE businesses SET is_human_takeover_active = TRUE WHERE id = $1", biz["id"])
-                    await audit_repo.log_event("HUMAN_TAKEOVER_START", "bot", "User requested human", order["id"])
-                elif status_key in ["GREETING", "ASK_ITEMS", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR", "MENU_INFO"]:
-                    await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
-                elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
-                    await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
-                elif status_key == "ORDER_CONFIRMED":
-                    # Deduct stock for confirmed orders
-                    all_stock_available = True
-                    for item in new_extracted_data.get("items", []):
-                        product_name = item.get("name")
-                        quantity = item.get("qty", 0)
-                        if product_name and quantity > 0:
-                            product = await product_repo.get_product_by_name(product_name)
-                            if not product or product["stock"] < quantity:
-                                all_stock_available = False
-                                status_key = "OUT_OF_STOCK"
-                                break
-                    
-                    if all_stock_available:
+                try:
+                    if status_key == "HUMAN_TAKEOVER":
+                        await merchant_repo.execute("UPDATE businesses SET is_human_takeover_active = TRUE WHERE id = $1", biz["id"])
+                        await audit_repo.log_event("HUMAN_TAKEOVER_START", "bot", "User requested human", order["id"])
+                    elif status_key in ["GREETING", "ASK_ITEMS", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR", "MENU_INFO"]:
+                        await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
+                    elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
+                        await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
+                    elif status_key == "ORDER_CONFIRMED":
+                        # Deduct stock for confirmed orders
+                        all_stock_available = True
                         for item in new_extracted_data.get("items", []):
                             product_name = item.get("name")
                             quantity = item.get("qty", 0)
                             if product_name and quantity > 0:
                                 product = await product_repo.get_product_by_name(product_name)
-                                await product_repo.update_product_stock(product["id"], quantity)
-                        await order_service.update_status(order["id"], "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
-                    else:
+                                if not product or product["stock"] < quantity:
+                                    all_stock_available = False
+                                    status_key = "OUT_OF_STOCK"
+                                    break
+                        
+                        if all_stock_available:
+                            for item in new_extracted_data.get("items", []):
+                                product_name = item.get("name")
+                                quantity = item.get("qty", 0)
+                                if product_name and quantity > 0:
+                                    product = await product_repo.get_product_by_name(product_name)
+                                    await product_repo.update_product_stock(product["id"], quantity)
+                            await order_service.update_status(order["id"], "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
+                        else:
+                            await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled due to insufficient stock")
+                    elif status_key == "OUT_OF_STOCK":
                         await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled due to insufficient stock")
-                elif status_key == "OUT_OF_STOCK":
-                    await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled due to insufficient stock")
-                elif status_key == "PAYMENT_RECEIVED_WAITING_REVIEW":
-                    await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
-                elif status_key == "ORDER_READY_TO_SHIP":
-                    await order_service.update_status(order["id"], "READY_TO_SHIP", "bot", "Order ready to ship")
-                elif status_key == "ORDER_COMPLETED":
-                    await order_service.update_status(order["id"], "COMPLETED", "bot", "Order completed")
-                elif status_key == "ORDER_CANCELLED":
-                    await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled by bot")
-                else:
-                    # For any other status_key that doesn't represent a final order state, keep it as COLLECTING_INFO
-                    await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
+                    elif status_key == "PAYMENT_RECEIVED_WAITING_REVIEW":
+                        await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
+                    elif status_key == "ORDER_READY_TO_SHIP":
+                        await order_service.update_status(order["id"], "READY_TO_SHIP", "bot", "Order ready to ship")
+                    elif status_key == "ORDER_COMPLETED":
+                        await order_service.update_status(order["id"], "COMPLETED", "bot", "Order completed")
+                    elif status_key == "ORDER_CANCELLED":
+                        await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled by bot")
+                    else:
+                        # For any other status_key that doesn't represent a final order state, keep it as COLLECTING_INFO
+                        await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
+                except Exception as status_err:
+                    logging.error(f"⚠️ Status Synchronization Error (Non-fatal): {str(status_err)}")
 
                 # 11. Generate Response
                 reply_text = flow.get_response(status_key, biz["name"])
