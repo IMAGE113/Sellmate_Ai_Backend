@@ -89,6 +89,16 @@ class MerchantRepository(BaseRepository):
         query = "UPDATE businesses SET is_human_takeover_active = $1 WHERE shop_id = $2"
         await self.execute(query, active, self.shop_id)
 
+class ProductRepository(BaseRepository):
+    async def get_product_by_name(self, product_name: str) -> Optional[Dict[str, Any]]:
+        query = "SELECT id, name, stock FROM products WHERE name = $1 AND shop_id = $2"
+        return await self.fetch_one(query, product_name, self.shop_id)
+
+    async def update_product_stock(self, product_id: int, quantity: int) -> None:
+        query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1"
+        await self.execute(query, quantity, product_id)
+
+
 class AuditRepository(BaseRepository):
     async def log_event(self, event_type: str, actor_source: str, description: str = None, order_id: int = None, details: Dict = None):
         query = """

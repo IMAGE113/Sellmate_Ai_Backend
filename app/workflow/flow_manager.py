@@ -49,7 +49,7 @@ class FlowManager:
            not self.order_data.get("payment_screenshot_received"):
             return "ASK_PAYMENT_SCREENSHOT"
 
-        return "CONFIRM_ORDER"
+        return "ORDER_CONFIRMED"
 
     def has_all_sizes(self) -> bool:
         for item in self.order_data.get("items", []):

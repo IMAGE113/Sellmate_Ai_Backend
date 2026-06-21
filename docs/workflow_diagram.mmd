@@ -1,0 +1,50 @@
+graph TD
+    START[Start] --> GREETING{Greeting?}
+    GREETING -- Yes, no items --> GREETING_STATE[GREETING]
+    GREETING -- No or has items --> ASK_ITEMS{Ask Items?}
+    ASK_ITEMS -- Yes --> ASK_ITEMS_STATE[ASK_ITEMS]
+    ASK_ITEMS -- No --> ASK_NAME{Ask Name?}
+    ASK_NAME -- Yes --> ASK_NAME_STATE[ASK_NAME]
+    ASK_NAME -- No --> ASK_PHONE{Ask Phone?}
+    ASK_PHONE -- Yes --> ASK_PHONE_STATE[ASK_PHONE]
+    ASK_PHONE -- No --> ASK_ADDRESS{Ask Address?}
+    ASK_ADDRESS -- Yes --> ASK_ADDRESS_STATE[ASK_ADDRESS]
+    ASK_ADDRESS -- No --> ASK_TOWNSHIP{Ask Township?}
+    ASK_TOWNSHIP -- Yes --> ASK_TOWNSHIP_STATE[ASK_TOWNSHIP]
+    ASK_TOWNSHIP -- No --> ASK_SIZE{Ask Size?}
+    ASK_SIZE -- Yes --> ASK_SIZE_STATE[ASK_SIZE]
+    ASK_SIZE -- No --> ASK_COLOR{Ask Color?}
+    ASK_COLOR -- Yes --> ASK_COLOR_STATE[ASK_COLOR]
+    ASK_COLOR -- No --> ASK_PAYMENT_METHOD{Ask Payment Method?}
+    ASK_PAYMENT_METHOD -- Yes --> ASK_PAYMENT_METHOD_STATE[ASK_PAYMENT_METHOD]
+    ASK_PAYMENT_METHOD -- No --> PAYMENT_PREPAID{Prepaid Payment?}
+    PAYMENT_PREPAID -- Yes, no screenshot --> ASK_PAYMENT_SCREENSHOT_STATE[ASK_PAYMENT_SCREENSHOT]
+    PAYMENT_PREPAID -- No or has screenshot --> ORDER_CONFIRMED[ORDER_CONFIRMED]
+
+    HUMAN_TAKEOVER_INTENT[HUMAN_TAKEOVER Intent] --> HUMAN_TAKEOVER_STATE[HUMAN_TAKEOVER]
+    MENU_QUERY_INTENT[MENU_QUERY Intent] --> MENU_INFO_STATE[MENU_INFO]
+
+    GREETING_STATE --> ASK_ITEMS
+    ASK_ITEMS_STATE --> ASK_NAME
+    ASK_NAME_STATE --> ASK_PHONE
+    ASK_PHONE_STATE --> ASK_ADDRESS
+    ASK_ADDRESS_STATE --> ASK_TOWNSHIP
+    ASK_TOWNSHIP_STATE --> ASK_SIZE
+    ASK_SIZE_STATE --> ASK_COLOR
+    ASK_COLOR_STATE --> ASK_PAYMENT_METHOD
+    ASK_PAYMENT_METHOD_STATE --> PAYMENT_PREPAID
+    ASK_PAYMENT_SCREENSHOT_STATE --> ORDER_CONFIRMED
+
+    style ORDER_CONFIRMED fill:#bbf,stroke:#333,stroke-width:2px
+    style HUMAN_TAKEOVER_STATE fill:#f9f,stroke:#333,stroke-width:2px
+    style MENU_INFO_STATE fill:#ccf,stroke:#333,stroke-width:2px
+    style GREETING_STATE fill:#cfc,stroke:#333,stroke-width:2px
+    style ASK_ITEMS_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_NAME_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_PHONE_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_ADDRESS_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_TOWNSHIP_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_SIZE_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_COLOR_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_PAYMENT_METHOD_STATE fill:#ffc,stroke:#333,stroke-width:2px
+    style ASK_PAYMENT_SCREENSHOT_STATE fill:#ffc,stroke:#333,stroke-width:2px
