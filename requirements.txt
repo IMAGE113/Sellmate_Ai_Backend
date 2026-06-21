@@ -12,3 +12,4 @@ certifi
 PyJWT
 alembic
 asyncpg
+boto3
