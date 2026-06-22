@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from app.db.database import get_db_pool
+from app.db.database import get_db_pool, MerchantRepository, OrderRepository
 
 async def run_cleanup_worker():
     pool = await get_db_pool()
@@ -11,10 +11,15 @@ async def run_cleanup_worker():
             async with pool.acquire() as conn:
                 # 1. Cleanup expired locks
                 await conn.execute("DELETE FROM conversation_locks WHERE expires_at < NOW()")
-                
-                # 2. Archive/Reset stale orders (inactive for > 24 hours)
-                # For now, we'll just mark them as CANCELLED or a new state STALE
-                await conn.execute("""
+
+            # 2. Archive/Reset stale orders (inactive for > 24 hours) for each tenant
+            merchant_repo = MerchantRepository(pool, "SYSTEM") # Use SYSTEM shop_id for global merchant operations
+            merchants = await merchant_repo.fetch_all("SELECT shop_id FROM businesses WHERE status = 'ACTIVE'")
+
+            for merchant in merchants:
+                shop_id = merchant["shop_id"]
+                order_repo = OrderRepository(pool, shop_id)
+                await order_repo.execute("""
                     UPDATE orders 
                     SET status = 'CANCELLED', 
                         updated_at = NOW(),
@@ -24,9 +29,10 @@ async def run_cleanup_worker():
                             'actor', 'system',
                             'description', 'Order cancelled due to 24h inactivity'
                         )
-                    WHERE status NOT IN ('COMPLETED', 'CANCELLED')
+                    WHERE shop_id = $1
+                    AND status NOT IN ('COMPLETED', 'CANCELLED')
                     AND updated_at < NOW() - INTERVAL '24 hours'
-                """)
+                """, shop_id)
                 
             await asyncio.sleep(3600) # Run every hour
         except Exception as e:

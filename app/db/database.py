@@ -95,8 +95,8 @@ class ProductRepository(BaseRepository):
         return await self.fetch_one(query, product_name, self.shop_id)
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
-        query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1"
-        await self.execute(query, quantity, product_id)
+        query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
+        await self.execute(query, quantity, product_id, self.shop_id)
 
 
 class AuditRepository(BaseRepository):

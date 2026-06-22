@@ -141,6 +141,8 @@ async def webhook(shop_id: str, request: Request):
 
         return {"ok": True}
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logging.error(f"🔥 Webhook Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")

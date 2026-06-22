@@ -143,8 +143,8 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(HTTPException) as cm:
             await webhook("shop_unknown", self.mock_request)
-        # It raises 500 because the exception handler catches the 404 and raises 500
-        self.assertEqual(cm.exception.status_code, 500)
+        # It now correctly raises 404
+        self.assertEqual(cm.exception.status_code, 404)
 
     # Test for webhook_receiver (internal server error)
     async def test_webhook_internal_server_error(self):
