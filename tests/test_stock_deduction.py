@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
+import json
 
 from app.db.database import ProductRepository, OrderRepository, AuditRepository, MerchantRepository
 from app.workers.order_worker import run_worker
@@ -97,9 +98,8 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher_asyncio_sleep.stop)
 
         # Mock FlowManager to control status_key
-        self.mock_flow_manager = MagicMock(spec=FlowManager)
-        patcher_FlowManager = patch("app.workers.order_worker.FlowManager", return_value=self.mock_flow_manager)
-        self.mock_FlowManager = patcher_FlowManager.start()
+        patcher_FlowManager = patch("app.workers.order_worker.FlowManager", new_callable=MagicMock)
+        self.mock_FlowManager_class = patcher_FlowManager.start()
         self.addCleanup(patcher_FlowManager.stop)
 
     # Test for ProductRepository.get_product_by_name
@@ -120,15 +120,24 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
     async def test_run_worker_stock_deduction_sufficient_stock(self, mock_sleep):
         # Simulate a task that leads to ORDER_CONFIRMED with sufficient stock
         self.mock_queue_manager.pop.side_effect = [
-            {"id": "task1", "shop_id": 1, "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"I want 2 apples\"}}"},
+            {"id": "task1", "shop_id": "shop_id_1", "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"Order 2 apples\"}}"},
             None # Stop after one task
         ]
         self.mock_lock_manager.acquire.return_value = True
-        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
-        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "extracted_data": {"items": [{"name": "apple", "qty": 2}]}})
-        self.mock_ai.extract_data.return_value = "{\"intent\": \"ORDER\", \"items\": [{\"name\": \"apple\", \"qty\": 2}]}"
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "shop_id": "shop_id_1", "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
+        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "status": "COLLECTING_INFO", "extracted_data": {"items": [{"name": "apple", "qty": 2}]}})
+        self.mock_ai.extract_data.return_value = json.dumps({"intent": "ORDER", "items": [{"name": "apple", "qty": 2}]})
         self.mock_ai.merge_data.return_value = {"items": [{"name": "apple", "qty": 2}]}
-        self.mock_flow_manager.get_next_step.return_value = "ORDER_CONFIRMED"
+        # The worker creates two FlowManager instances. The first one is for reset/new order check.
+        # The second one is for the main workflow logic.
+        # So, the side_effect needs to provide values for both instances' get_next_step calls.
+        # We need to mock the FlowManager class itself, and then configure its instances.
+        mock_flow_manager_instance1 = MagicMock()
+        mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO" # For the reset/new order check
+        mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
+        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
         self.order_service.update_status = AsyncMock(return_value=None)
 
@@ -147,15 +156,20 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
     async def test_run_worker_stock_deduction_insufficient_stock(self, mock_sleep):
         # Simulate a task that leads to ORDER_CONFIRMED with insufficient stock
         self.mock_queue_manager.pop.side_effect = [
-            {"id": "task1", "shop_id": 1, "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"I want 20 apples\"}}"},
+            {"id": "task1", "shop_id": "shop_id_1", "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"Order 20 apples\"}}"},
             None # Stop after one task
         ]
         self.mock_lock_manager.acquire.return_value = True
-        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
-        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "extracted_data": {"items": [{"name": "apple", "qty": 20}]}})
-        self.mock_ai.extract_data.return_value = "{\"intent\": \"ORDER\", \"items\": [{\"name\": \"apple\", \"qty\": 20}]}"
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "shop_id": "shop_id_1", "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
+        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "status": "COLLECTING_INFO", "extracted_data": {"items": [{"name": "apple", "qty": 20}]}})
+        self.mock_ai.extract_data.return_value = json.dumps({"intent": "ORDER", "items": [{"name": "apple", "qty": 20}]})
         self.mock_ai.merge_data.return_value = {"items": [{"name": "apple", "qty": 20}]}
-        self.mock_flow_manager.get_next_step.return_value = "ORDER_CONFIRMED"
+        mock_flow_manager_instance1 = MagicMock()
+        mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO"
+        mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
+        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
         self.order_service.update_status = AsyncMock(return_value=None)
 
@@ -168,21 +182,26 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
 
         self.mock_product_repo.get_product_by_name.assert_called_with("apple")
         self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
-        self.order_service.update_status.assert_called_with(101, "CANCELLED", "bot", "Order cancelled due to insufficient stock")
+        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
 
     @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
     async def test_run_worker_stock_deduction_product_not_found(self, mock_sleep):
         # Simulate a task that leads to ORDER_CONFIRMED with a product not found
         self.mock_queue_manager.pop.side_effect = [
-            {"id": "task1", "shop_id": 1, "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"I want 2 oranges\"}}"},
+            {"id": "task1", "shop_id": "shop_id_1", "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"Order 2 oranges\"}}"},
             None # Stop after one task
         ]
         self.mock_lock_manager.acquire.return_value = True
-        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
-        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "extracted_data": {"items": [{"name": "orange", "qty": 2}]}})
-        self.mock_ai.extract_data.return_value = "{\"intent\": \"ORDER\", \"items\": [{\"name\": \"orange\", \"qty\": 2}]}"
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "shop_id": "shop_id_1", "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
+        self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "status": "COLLECTING_INFO", "extracted_data": {"items": [{"name": "orange", "qty": 2}]}})
+        self.mock_ai.extract_data.return_value = json.dumps({"intent": "ORDER", "items": [{"name": "orange", "qty": 2}]})
         self.mock_ai.merge_data.return_value = {"items": [{"name": "orange", "qty": 2}]}
-        self.mock_flow_manager.get_next_step.return_value = "ORDER_CONFIRMED"
+        mock_flow_manager_instance1 = MagicMock()
+        mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO"
+        mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
+        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
         self.mock_product_repo.get_product_by_name.return_value = None # Product not found
         self.order_service.update_status = AsyncMock(return_value=None)
 
@@ -195,7 +214,7 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
 
         self.mock_product_repo.get_product_by_name.assert_called_with("orange")
         self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
-        self.order_service.update_status.assert_called_with(101, "CANCELLED", "bot", "Order cancelled due to insufficient stock")
+        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
 
 if __name__ == "__main__":
     unittest.main()

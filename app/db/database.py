@@ -91,7 +91,7 @@ class MerchantRepository(BaseRepository):
 
 class ProductRepository(BaseRepository):
     async def get_product_by_name(self, product_name: str) -> Optional[Dict[str, Any]]:
-        query = "SELECT id, name, stock FROM products WHERE name = $1 AND shop_id = $2"
+        query = "SELECT id, name, description, price, stock, category, sku, image_url, variant_of_id, attributes, is_active, created_at FROM products WHERE name = $1 AND shop_id = $2"
         return await self.fetch_one(query, product_name, self.shop_id)
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:

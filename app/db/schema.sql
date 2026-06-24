@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS products (
     price DECIMAL(12, 2) NOT NULL,
     stock INTEGER DEFAULT 0,
     category VARCHAR(50),
+    sku VARCHAR(50) UNIQUE,
+    image_url TEXT,
+    variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+    attributes JSONB DEFAULT '{}'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW()
 );

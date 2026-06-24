@@ -30,9 +30,12 @@ EXTRACTABLE FIELDS:
 - phone_no
 - address
 - township
-- items: list of {{ "name": "...", "qty": ..., "details": "..." }}
+- items: list of {{ "name": "...", "qty": ..., "details": "..." }} (for adding/changing items)
+- item_to_remove: string (for removing an item)
+- item_to_change_qty: string (for changing quantity of an item)
+- new_quantity: integer (for changing quantity of an item)
 - payment_method: 'COD' or 'Prepaid'
-- intent: 'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 'OTHER'
+- intent: 'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 'VIEW_SUMMARY', 'ADD_ITEM', 'REMOVE_ITEM', 'CHANGE_QUANTITY', 'CHANGE_NAME', 'CHANGE_PHONE', 'CHANGE_ADDRESS', 'OTHER'
 
 STRICT RULES:
 1. PRODUCT NAMES must match EXACTLY from this list: {json.dumps(menu_names)}
@@ -80,6 +83,15 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                     if name:
                         current_items[name] = item
                 merged["items"] = list(current_items.values())
+            elif key == "item_to_remove":
+                if value:
+                    merged["items"] = [item for item in merged.get("items", []) if item.get("name", "").lower() != value.lower()]
+            elif key == "item_to_change_qty":
+                if value and new_data.get("new_quantity") is not None:
+                    for item in merged.get("items", []):
+                        if item.get("name", "").lower() == value.lower():
+                            item["qty"] = new_data["new_quantity"]
+                            break
             elif value and value != "unknown":
                 merged[key] = value
         return merged

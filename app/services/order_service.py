@@ -18,7 +18,18 @@ class OrderService:
         self.order_repo = order_repo
         self.audit_repo = audit_repo
 
-    async def get_or_create_active_order(self, chat_id: int, business_id: int) -> Dict[str, Any]:
+    async def get_or_create_active_order(self, chat_id: int, business_id: int, force_new: bool = False) -> Dict[str, Any]:
+        if force_new:
+            # If force_new is True, explicitly create a new order
+            order = await self.order_repo.create_order(chat_id, business_id)
+            await self.audit_repo.log_event(
+                event_type="ORDER_STATUS_CHANGE",
+                actor_source="system",
+                description="New order created from chat (forced)",
+                order_id=order["id"]
+            )
+            return order
+
         order = await self.order_repo.get_active_order_by_chat_id(chat_id)
         if not order:
             order = await self.order_repo.create_order(chat_id, business_id)
