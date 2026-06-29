@@ -115,16 +115,60 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         flow_manager = FlowManager({}, {})
         self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_ITEMS")
 
-        # Test case 5: Ask for name
-        flow_manager = FlowManager({"setting_require_name": True}, {"items": [{"name": "item1"}]})
+        # Test case 4b: Items present but quantity missing -> ASK_QUANTITY (M3)
+        flow_manager = FlowManager({}, {"items": [{"name": "item1"}]})
+        self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_QUANTITY")
+
+        # Test case 5: Ask for name (item now has a valid quantity)
+        flow_manager = FlowManager({"setting_require_name": True}, {"items": [{"name": "item1", "qty": 1}]})
         self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_NAME")
 
-        # Test case 6: Order confirmed
+        # Test case 6: All fields collected -> ORDER_SUMMARY (no auto-confirm). C1/H2.
+        complete_data = {
+            "items": [{"name": "item1", "qty": 1}],
+            "customer_name": "test", "phone_no": "123", "address": "abc",
+            "township": "xyz", "payment_method": "COD",
+        }
         flow_manager = FlowManager(
             {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
-            {"items": [{"name": "item1"}], "customer_name": "test", "phone_no": "123", "address": "abc", "township": "xyz", "payment_method": "COD"}
+            dict(complete_data),
         )
-        self.assertEqual(flow_manager.get_next_step("ORDER"), "ORDER_CONFIRMED")
+        self.assertEqual(flow_manager.get_next_step("ORDER"), "ORDER_SUMMARY")
+
+        # Test case 7: After summary shown, awaiting an explicit decision.
+        awaiting_data = dict(complete_data)
+        awaiting_data["summary_shown"] = True
+        flow_manager = FlowManager(
+            {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
+            awaiting_data,
+        )
+        self.assertEqual(flow_manager.get_next_step("ORDER"), "AWAITING_CONFIRMATION")
+
+        # Test case 8: Explicit confirmation -> ORDER_CONFIRMED.
+        flow_manager = FlowManager(
+            {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
+            dict(awaiting_data),
+        )
+        self.assertEqual(
+            flow_manager.get_next_step("ORDER", user_text="confirm order"),
+            "ORDER_CONFIRMED",
+        )
+        # Confirmation can also arrive as an explicit intent.
+        flow_manager = FlowManager(
+            {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
+            dict(awaiting_data),
+        )
+        self.assertEqual(flow_manager.get_next_step("CONFIRM_ORDER"), "ORDER_CONFIRMED")
+
+        # Test case 9: Explicit cancellation -> ORDER_CANCELLED.
+        flow_manager = FlowManager(
+            {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
+            dict(awaiting_data),
+        )
+        self.assertEqual(
+            flow_manager.get_next_step("ORDER", user_text="cancel order"),
+            "CONVERSATION_RESET",
+        )
 
     # Test for OrderService.get_or_create_active_order
     async def test_order_service_get_or_create_active_order(self):

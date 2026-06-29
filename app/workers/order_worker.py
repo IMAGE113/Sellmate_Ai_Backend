@@ -15,10 +15,10 @@ from app.services.rate_limiter import rate_limiter
 from app.services.lifecycle_service import LifecycleService, LifecycleRepository
 
 # ==========================================
-# 🛡️ [SAFE UTILITIES] ဘာဒေတာပဲလာလာ Error မတက်အောင် ကြိုတင်သန့်စင်ပေးမယ့် Functions
+# [SAFE UTILITIES]
 # ==========================================
 def make_json_safe(data: Any) -> Any:
-    """ Decimal တွေကို float အဖြစ် အလိုအလျောက် ပြောင်းပေးတဲ့ စနစ် """
+    """ Recursively convert Decimal values to float so the payload is JSON safe. """
     if isinstance(data, list):
         return [make_json_safe(item) for item in data]
     if isinstance(data, dict):
@@ -28,7 +28,7 @@ def make_json_safe(data: Any) -> Any:
     return data
 
 def force_dict(data: Any) -> dict:
-    """ Database က String သို့မဟုတ် None ထွက်လာရင်တောင် dict ဖြစ်အောင် အတင်းပြောင်းပေးမယ့် စနစ် """
+    """ Coerce DB string/None values into a dict so downstream code is safe. """
     if not data:
         return {}
     if isinstance(data, dict):
@@ -37,22 +37,61 @@ def force_dict(data: Any) -> dict:
         try:
             parsed = json.loads(data)
             return parsed if isinstance(parsed, dict) else {}
-        except:
+        except Exception:
             return {}
     return {}
+
+
+# Inline keyboard offered to the customer at the confirmation gate (H3).
+def _confirm_keyboard() -> dict:
+    return {
+        "inline_keyboard": [[
+            {"text": "\u2705 Confirm", "callback_data": "confirm order"},
+            {"text": "\u274C Cancel", "callback_data": "cancel order"},
+        ]]
+    }
+
+
+def _price_for(menu, product_name):
+    """ Look up a product price from the menu list; tolerate malformed menus. """
+    try:
+        for p in menu:
+            if isinstance(p, dict) and p.get("name") == product_name:
+                return p.get("price", 0) or 0
+    except TypeError:
+        return 0
+    return 0
+
+
+def _compute_summary(items, menu):
+    """ Build the human-readable summary lines and numeric total for an order. """
+    summary_lines = []
+    total_price = 0.0
+    for item in (items or []):
+        product_name = item.get("name", "Unknown Item")
+        quantity = item.get("qty", 0) or 0
+        try:
+            quantity = float(quantity)
+        except (TypeError, ValueError):
+            quantity = 0
+        price = float(_price_for(menu, product_name) or 0)
+        item_total = price * quantity
+        total_price += item_total
+        summary_lines.append(f"{product_name} x {int(quantity)} ({item_total:.2f} \u1015\u103C\u102C\u1038)")
+    return summary_lines, total_price
 # ==========================================
 
 async def run_worker():
     pool = await get_db_pool()
     worker_id = f"worker-{os.getpid()}"
-    logging.info(f"🚀 SellMate AI Multi-tenant Workflow Worker {worker_id} started...")
+    logging.info(f"SellMate AI Multi-tenant Workflow Worker {worker_id} started...")
 
     while True:
         try:
             # 1. Fetch pending task using QueueManager
-            queue_repo = QueueRepository(pool, "SYSTEM") 
+            queue_repo = QueueRepository(pool, "SYSTEM")
             queue_manager = QueueManager(queue_repo, worker_id)
-            
+
             task = await queue_manager.pop("inbound_messages")
 
             if not task:
@@ -63,7 +102,7 @@ async def run_worker():
             payload = json.loads(task["payload"])
             chat_id = payload["chat_id"]
             user_text = payload["data"].get("user_text", "")
-                
+
             # 2. Global Lifecycle & Rate Limit Check
             lifecycle_service = LifecycleService(LifecycleRepository(pool, shop_id))
             try:
@@ -97,7 +136,7 @@ async def run_worker():
                     await queue_manager.fail(task["id"], f"Merchant {shop_id} not found", can_retry=False)
                     continue
 
-                # 4. Human Takeover Check
+                # 4b. Human Takeover Check
                 if biz.get("is_human_takeover_active"):
                     logging.info(f"Human takeover active for {shop_id}, skipping AI")
                     await queue_manager.complete(task["id"])
@@ -105,8 +144,6 @@ async def run_worker():
 
                 # 5. Fetch/Create Order
                 order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"])
-                
-                # 🛡️ [SAFE FIX 1] Order ရဲ့ extracted_data က String ဖြစ်နေရင် dict ဖြစ်အောင် အတင်းပြောင်းလိုက်မယ်
                 order = dict(order_raw) if order_raw else {}
                 order["extracted_data"] = force_dict(order.get("extracted_data", {}))
 
@@ -119,13 +156,10 @@ async def run_worker():
                         "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
                         json.dumps({}), order["id"]
                     )
-                    # Create a new order for the next interaction
                     order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
                     order = dict(order_raw) if order_raw else {}
                     order["extracted_data"] = force_dict(order.get("extracted_data", {}))
-                    # Override user_text to trigger a fresh greeting
                     user_text = "Hello"
-                    # Skip further processing for this cycle as a new order has been initiated
                     await queue_manager.complete(task["id"])
                     continue
                 elif order.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK"] and flow_manager_temp.get_next_step(intent="ORDER", user_text=user_text) == "NEW_ORDER_INITIATED":
@@ -133,102 +167,66 @@ async def run_worker():
                     order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
                     order = dict(order_raw) if order_raw else {}
                     order["extracted_data"] = force_dict(order.get("extracted_data", {}))
-                    user_text = "Hello" # Trigger a fresh greeting for the new order
-                    # Skip further processing for this cycle as a new order has been initiated
+                    user_text = "Hello"
                     await queue_manager.complete(task["id"])
                     continue
-                
+
                 # 6. Fetch Menu
                 menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
                 menu_raw = [dict(m) for m in menu_rows]
-                
-                # 🛡️ [SAFE FIX 2] Menu ထဲက Decimal စျေးနှုန်းတွေကို အလိုအလျောက် JSON Safe ဖြစ်အောင် float ပြောင်းပေးမယ်
                 menu = make_json_safe(menu_raw)
 
                 # 7. AI Extraction
                 extracted_json = await ai.extract_data(
-                    user_text, 
-                    biz["name"], 
-                    menu, 
+                    user_text,
+                    biz["name"],
+                    menu,
                     order.get("extracted_data", {}),
                     biz.get("requirements_text")
                 )
-                
-                # 🛡️ [SAFE FIX 3] AI ဆီက ပြန်လာတဲ့ Json ကို loads လုပ်ပြီး ဒေတာသန့်စင်မယ်
                 extracted_data = force_dict(json.loads(extracted_json) if isinstance(extracted_json, str) else extracted_json)
-                
+
                 # 8. Merge Data & Update Order
                 new_extracted_data = ai.merge_data(order.get("extracted_data", {}), extracted_data)
                 intent = extracted_data.get("intent", "ORDER")
-                
-                # Update order in DB
+
                 await order_repo.execute(
                     "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
                     json.dumps(new_extracted_data), order["id"]
                 )
 
                 # 9. Workflow Management
+                # FIX (M1): pass user_text so reset/intent/confirmation handling works.
                 flow = FlowManager(biz, new_extracted_data)
-                status_key = flow.get_next_step(intent)
-                
-                # 10. Handle Intent/Status Actions and Synchronize workflow status with order status
+                status_key = flow.get_next_step(intent, user_text=user_text)
+
+                # Precompute the summary once; used by ORDER_SUMMARY, AWAITING_CONFIRMATION and finalize.
+                summary_lines, total_price = _compute_summary(new_extracted_data.get("items", []), menu)
+                summary_text = "\n".join(summary_lines)
+
+                # 10. Handle non-terminal status synchronization.
+                # NOTE: Only NON-critical status bookkeeping lives in this try/except.
+                # Critical mutations (stock deduction + order finalize) are handled
+                # separately below WITHOUT swallowing errors (H1).
                 try:
                     if status_key == "HUMAN_TAKEOVER":
                         await merchant_repo.execute("UPDATE businesses SET is_human_takeover_active = TRUE WHERE id = $1", biz["id"])
                         await audit_repo.log_event("HUMAN_TAKEOVER_START", "bot", "User requested human", order["id"])
-                    elif status_key in ["GREETING", "ASK_ITEMS", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR", "MENU_INFO"]:
+                    elif status_key in ["GREETING", "ASK_ITEMS", "ASK_QUANTITY", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR", "MENU_INFO"]:
                         await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
                     elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
                         await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
-                    elif status_key == "ORDER_CONFIRMED":
-                        # Duplicate protection for stock deduction
-                        if not new_extracted_data.get("stock_deducted", False):
-                            all_stock_available = True
-                            for item in new_extracted_data.get("items", []):
-                                product_name = item.get("name")
-                                quantity = item.get("qty", 0)
-                                if product_name and quantity > 0:
-                                    product = await product_repo.get_product_by_name(product_name)
-                                    if not product or product["stock"] < quantity:
-                                        all_stock_available = False
-                                        status_key = "OUT_OF_STOCK"
-                                        break
-                            
-                            if all_stock_available:
-                                for item in new_extracted_data.get("items", []):
-                                    product_name = item.get("name")
-                                    quantity = item.get("qty", 0)
-                                    if product_name and quantity > 0:
-                                        product = await product_repo.get_product_by_name(product_name)
-                                        await product_repo.update_product_stock(product["id"], quantity)
-                                # Mark stock as deducted to prevent duplicates
-                                new_extracted_data["stock_deducted"] = True
-                                await order_repo.execute(
-                                    "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                                    json.dumps(new_extracted_data), order["id"]
-                                )
-                                # Duplicate protection for payment confirmation
-                                if not new_extracted_data.get("payment_confirmed", False):
-                                    new_extracted_data["payment_confirmed"] = True
-                                    await order_repo.execute(
-                                        "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                                        json.dumps(new_extracted_data), order["id"]
-                                    )
-                                    await order_service.update_status(order["id"], "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
-                                else:
-                                    logging.info(f"Payment already confirmed for order {order["id"]}. Skipping duplicate confirmation.")
-                            else:
-                                # If stock is insufficient, the status_key will be set to OUT_OF_STOCK by the flow manager
-                                # If stock is insufficient, the status_key will be set to OUT_OF_STOCK.
-                                # Call update_status here to reflect the OUT_OF_STOCK status immediately.
-                                await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
-                        else:
-                            logging.info(f"Stock already deducted for order {order['id']}. Skipping duplicate deduction.")
-                    elif status_key == "OUT_OF_STOCK":
-                        # As per Fix 5, do not cancel immediately. FlowManager will handle the response.
-                        await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+                    elif status_key in ["ORDER_SUMMARY", "AWAITING_CONFIRMATION"]:
+                        # Mark that the summary has been presented so the next message
+                        # is treated as an explicit confirm/cancel decision.
+                        if not new_extracted_data.get("summary_shown"):
+                            new_extracted_data["summary_shown"] = True
+                            await order_repo.execute(
+                                "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                                json.dumps(new_extracted_data), order["id"]
+                            )
+                        await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", "Awaiting customer confirmation")
                     elif status_key == "PAYMENT_RECEIVED_WAITING_REVIEW":
-                        # Duplicate protection for payment pending review
                         if not new_extracted_data.get("payment_pending_review", False):
                             new_extracted_data["payment_pending_review"] = True
                             await order_repo.execute(
@@ -236,63 +234,114 @@ async def run_worker():
                                 json.dumps(new_extracted_data), order["id"]
                             )
                             await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
-                        else:
-                            logging.info(f"Payment already pending review for order {order["id"]}. Skipping duplicate status update.")
-                    elif status_key == "ORDER_READY_TO_SHIP":
-                        await order_service.update_status(order["id"], "READY_TO_SHIP", "bot", "Order ready to ship")
-                    elif status_key == "ORDER_COMPLETED":
-                        await order_service.update_status(order["id"], "COMPLETED", "bot", "Order completed")
+                    elif status_key == "OUT_OF_STOCK":
+                        await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
                     elif status_key == "ORDER_CANCELLED":
-                        await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled by bot")
+                        await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled by customer")
+                    elif status_key in ["ORDER_CONFIRMED"]:
+                        # Side effects handled in the dedicated finalize block below.
+                        pass
                     else:
-                        # For any other status_key that doesn't represent a final order state, keep it as COLLECTING_INFO
                         await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
                 except Exception as status_err:
-                    logging.error(f"⚠️ Status Synchronization Error (Non-fatal): {str(status_err)}")
+                    logging.error(f"Status Synchronization Error (Non-fatal): {str(status_err)}")
+
+                # 10b. CONFIRMATION -> FINALIZE (C2 / C3 / H1).
+                # This runs only after an explicit confirmation reached ORDER_CONFIRMED.
+                # Stock check + deduction + order finalize happen atomically. Any
+                # failure here is FATAL: we must not tell the customer "success".
+                finalize_failed = False
+                if status_key == "ORDER_CONFIRMED":
+                    if new_extracted_data.get("stock_deducted", False):
+                        logging.info(f"Stock already deducted for order {order['id']}. Skipping duplicate finalize.")
+                    else:
+                        # Stock availability gate.
+                        all_stock_available = True
+                        priced_items = []
+                        for item in new_extracted_data.get("items", []):
+                            product_name = item.get("name")
+                            quantity = item.get("qty", 0) or 0
+                            if product_name and quantity > 0:
+                                product = await product_repo.get_product_by_name(product_name)
+                                if not product or product["stock"] < quantity:
+                                    all_stock_available = False
+                                    break
+                                priced_items.append((product, quantity))
+
+                        if not all_stock_available:
+                            status_key = "OUT_OF_STOCK"
+                            await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+                        else:
+                            customer_name = new_extracted_data.get("customer_name")
+                            try:
+                                # Atomic: deduct stock + write dashboard columns + COMPLETED.
+                                await order_repo.finalize_order_with_stock(
+                                    order["id"],
+                                    customer_name,
+                                    total_price,
+                                    [(p["id"], q) for (p, q) in priced_items],
+                                )
+                                new_extracted_data["stock_deducted"] = True
+                                new_extracted_data["payment_confirmed"] = True
+                                await order_repo.execute(
+                                    "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                                    json.dumps(new_extracted_data), order["id"]
+                                )
+                                await audit_repo.log_event(
+                                    "ORDER_FINALIZED", "bot",
+                                    "Order confirmed, stock deducted and order completed",
+                                    order["id"],
+                                    {"total_price": total_price, "customer_name": customer_name},
+                                )
+                            except Exception as finalize_err:
+                                # FATAL: do NOT report success to the customer.
+                                finalize_failed = True
+                                logging.error(f"Order finalize FAILED for order {order['id']}: {finalize_err}", exc_info=True)
+                                await audit_repo.log_event(
+                                    "ORDER_FINALIZE_FAILED", "bot",
+                                    f"Finalize failed: {finalize_err}", order["id"],
+                                )
 
                 # 11. Generate Response
-                reply_text = ""
-                if status_key == "ORDER_SUMMARY":
-                    # Generate order summary
-                    order_summary_details = []
-                    total_price = 0
-                    for item in new_extracted_data.get("items", []):
-                        product_name = item.get("name", "Unknown Item")
-                        quantity = item.get("qty", 0)
-                        price = next((p["price"] for p in menu if p["name"] == product_name), 0)
-                        item_total = price * quantity
-                        total_price += item_total
-                        order_summary_details.append(f"{product_name} x {quantity} ({item_total:.2f} ကျပ်)")
-                    
+                if finalize_failed:
+                    # Never send the success script when persistence failed.
+                    reply_text = flow.get_response("FALLBACK", biz["name"])
+                    reply_markup = None
+                elif status_key in ["ORDER_SUMMARY", "AWAITING_CONFIRMATION"]:
                     reply_text = flow.get_response(
-                        status_key,
+                        "ORDER_SUMMARY",
                         biz["name"],
-                        order_summary_details="\n".join(order_summary_details),
+                        order_summary_details=summary_text,
                         total_price=f"{total_price:.2f}",
                         customer_name=new_extracted_data.get("customer_name", "N/A"),
                         phone_no=new_extracted_data.get("phone_no", "N/A"),
-                        address=new_extracted_data.get("address", "N/A")
+                        address=new_extracted_data.get("address", "N/A"),
                     )
+                    reply_markup = _confirm_keyboard()
                 else:
                     reply_text = flow.get_response(status_key, biz["name"])
-                
+                    reply_markup = None
+
                 # 12. Send Response
-                await send(biz["tg_bot_token"], chat_id, reply_text)
-                
+                await send(biz["tg_bot_token"], chat_id, reply_text, reply_markup=reply_markup)
+
                 # 13. Audit Log
                 await audit_repo.log_event("BOT_REPLY", "bot", f"Replied with {status_key}", order["id"], {"reply": reply_text})
 
-                # 14. Mark task as completed
-                await queue_manager.complete(task["id"])
+                # 14. Mark task as completed / failed
+                if finalize_failed:
+                    await queue_manager.fail(task["id"], "Order finalize failed", can_retry=True)
+                else:
+                    await queue_manager.complete(task["id"])
 
             finally:
                 # Always release the lock
                 await lock_manager.release(chat_id)
 
         except Exception as e:
-            logging.error(f"🔥 Worker Error: {str(e)}", exc_info=True)
+            logging.error(f"Worker Error: {str(e)}", exc_info=True)
             if 'task' in locals() and task:
                 await queue_manager.fail(task["id"], str(e))
             await asyncio.sleep(2)
-        
+
         await asyncio.sleep(0.1)

@@ -149,8 +149,13 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
                 pass
 
         self.mock_product_repo.get_product_by_name.assert_called_with("apple")
-        self.mock_product_repo.update_product_stock.assert_called_once_with(1, 2)
-        self.order_service.update_status.assert_called_with(101, "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
+        # Stock deduction + finalize now happen atomically in one repo call (C2/C3/H1).
+        self.mock_order_repo.finalize_order_with_stock.assert_called_once()
+        finalize_args = self.mock_order_repo.finalize_order_with_stock.call_args.args
+        self.assertEqual(finalize_args[0], 101)            # order_id
+        self.assertEqual(finalize_args[3], [(1, 2)])       # (product_id, qty) deductions
+        # The direct (non-atomic) stock mutation must no longer be used.
+        self.mock_product_repo.update_product_stock.assert_not_called()
 
     @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
     async def test_run_worker_stock_deduction_insufficient_stock(self, mock_sleep):
@@ -181,6 +186,7 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
                 pass
 
         self.mock_product_repo.get_product_by_name.assert_called_with("apple")
+        self.mock_order_repo.finalize_order_with_stock.assert_not_called() # Nothing finalized
         self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
         self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
 
@@ -213,6 +219,7 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
                 pass
 
         self.mock_product_repo.get_product_by_name.assert_called_with("orange")
+        self.mock_order_repo.finalize_order_with_stock.assert_not_called() # Nothing finalized
         self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
         self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
 

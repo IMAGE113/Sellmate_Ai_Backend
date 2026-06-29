@@ -87,6 +87,67 @@ class OrderRepository(BaseRepository):
         """
         await self.execute(query, status, actor, description, order_id, self.shop_id)
 
+    async def finalize_order(self, order_id: int, customer_name: str, total_price, status: str = "COMPLETED"):
+        """
+        Write the dashboard-visible columns (customer_name, total_price, status)
+        for a confirmed order. Previously these columns were never populated,
+        which left the Dashboard, Order History and analytics empty (C2).
+        """
+        query = """
+            UPDATE orders
+            SET customer_name = $1,
+                total_price = $2,
+                status = $3,
+                timeline = timeline || jsonb_build_object(
+                    'timestamp', CURRENT_TIMESTAMP,
+                    'status', $3,
+                    'actor', 'bot',
+                    'description', 'Order finalized'
+                ),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $4 AND shop_id = $5
+        """
+        await self.execute(query, customer_name, total_price, status, order_id, self.shop_id)
+
+    async def finalize_order_with_stock(self, order_id: int, customer_name: str, total_price, stock_deductions, status: str = "COMPLETED"):
+        """
+        Atomically finalize an order: deduct stock for each (product_id, qty) and
+        write the dashboard columns + terminal status in a single transaction.
+        If any statement fails the whole transaction rolls back, so we never end
+        up with deducted stock but no finalized order, or vice versa (C3 / H1).
+
+        stock_deductions: iterable of (product_id, quantity) tuples.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for product_id, quantity in stock_deductions:
+                    result = await conn.execute(
+                        "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1",
+                        quantity, product_id, self.shop_id,
+                    )
+                    # asyncpg returns e.g. 'UPDATE 1'; 'UPDATE 0' means stock was
+                    # insufficient at commit time -> abort the whole finalize.
+                    if result.endswith("0"):
+                        raise ValueError(f"Insufficient stock for product {product_id} during finalize")
+
+                await conn.execute(
+                    """
+                    UPDATE orders
+                    SET customer_name = $1,
+                        total_price = $2,
+                        status = $3,
+                        timeline = timeline || jsonb_build_object(
+                            'timestamp', CURRENT_TIMESTAMP,
+                            'status', $3,
+                            'actor', 'bot',
+                            'description', 'Order finalized'
+                        ),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4 AND shop_id = $5
+                    """,
+                    customer_name, total_price, status, order_id, self.shop_id,
+                )
+
 class MerchantRepository(BaseRepository):
     async def get_merchant_by_shop_id(self) -> Optional[Dict[str, Any]]:
         query = "SELECT * FROM businesses WHERE shop_id = $1"
