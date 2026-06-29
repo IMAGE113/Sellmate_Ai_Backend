@@ -103,7 +103,7 @@ class AuditRepository(BaseRepository):
     async def log_event(self, event_type: str, actor_source: str, description: str = None, order_id: int = None, details: Dict = None):
         query = """
             INSERT INTO audit_logs (business_id, shop_id, order_id, event_type, description, actor_source, details)
-            SELECT id, shop_id, $1, $2, $3, $4, $5 FROM businesses WHERE shop_id = $6
+            SELECT id, shop_id, $1::int, $2::varchar, $3::text, $4::varchar, $5::jsonb FROM businesses WHERE shop_id = $6
         """
         await self.execute(query, order_id, event_type, description, actor_source, json.dumps(details or {}), self.shop_id)
 
