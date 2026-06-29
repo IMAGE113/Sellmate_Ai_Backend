@@ -19,6 +19,17 @@ async def init_db(pool):
             schema_sql = f.read()
         async with pool.acquire() as conn:
             await conn.execute(schema_sql)
+            # Backfill columns on databases created before these columns were
+            # added to schema.sql. CREATE TABLE IF NOT EXISTS does not add new
+            # columns to a pre-existing table, which caused
+            # 'column "sku" does not exist' on drifted deployments.
+            await conn.execute("""
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50) UNIQUE;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+            """)
 
 class BaseRepository:
     def __init__(self, pool: asyncpg.Pool, shop_id: str):
