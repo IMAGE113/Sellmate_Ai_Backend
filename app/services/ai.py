@@ -30,12 +30,17 @@ EXTRACTABLE FIELDS:
 - phone_no
 - address
 - township
-- items: list of {{ "name": "...", "qty": ..., "details": "..." }} (for adding/changing items)
-- item_to_remove: string (for removing an item)
-- item_to_change_qty: string (for changing quantity of an item)
-- new_quantity: integer (for changing quantity of an item)
-- payment_method: 'COD' or 'Prepaid'
-- intent: 'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 'VIEW_SUMMARY', 'ADD_ITEM', 'REMOVE_ITEM', 'CHANGE_QUANTITY', 'CHANGE_NAME', 'CHANGE_PHONE', 'CHANGE_ADDRESS', 'OTHER'
+            - items: list of {{ "name": "...", "qty": ..., "size": "...", "color": "...", "sugar_level": "...", "ice_level": "...", "details": "..." }} (for adding/changing items)
+            - item_to_remove: string (for removing an item)
+            - item_to_change_qty: string (for changing quantity of an item)
+            - new_quantity: integer (for changing quantity of an item)
+            - item_to_change_variant: string (name of the item to change variant for)
+            - new_size: string (new size for the item)
+            - new_color: string (new color for the item)
+            - new_sugar_level: string (new sugar level for the item)
+            - new_ice_level: string (new ice level for the item)
+            - payment_method: 'COD' or 'Prepaid'
+            - intent: 'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 'VIEW_SUMMARY', 'ADD_ITEM', 'REMOVE_ITEM', 'CHANGE_QUANTITY', 'CHANGE_NAME', 'CHANGE_PHONE', 'CHANGE_ADDRESS', 'CHANGE_ITEM_VARIANT', 'CONFIRM_ORDER', 'OTHER'
 
 STRICT RULES:
 1. PRODUCT NAMES must match EXACTLY from this list: {json.dumps(menu_names)}
@@ -92,7 +97,19 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                         if item.get("name", "").lower() == value.lower():
                             item["qty"] = new_data["new_quantity"]
                             break
-            elif value and value != "unknown":
+            elif key == "item_to_change_variant":
+                item_name = value
+                for item in merged.get("items", []):
+                    if item.get("name", "").lower() == item_name.lower():
+                        if new_data.get("new_size") is not None: item["size"] = new_data["new_size"]
+                        if new_data.get("new_color") is not None: item["color"] = new_data["new_color"]
+                        if new_data.get("new_sugar_level") is not None: item["sugar_level"] = new_data["new_sugar_level"]
+                        if new_data.get("new_ice_level") is not None: item["ice_level"] = new_data["new_ice_level"]
+                        break
+            elif key in ["customer_name", "phone_no", "address", "payment_method"]:
+                if value and value != "unknown":
+                    merged[key] = value
+            elif value and value != "unknown" and key not in ["item_to_change_qty", "new_quantity", "new_size", "new_color", "new_sugar_level", "new_ice_level", "item_to_change_variant"]:
                 merged[key] = value
         return merged
 

@@ -102,8 +102,16 @@ class MerchantRepository(BaseRepository):
 
 class ProductRepository(BaseRepository):
     async def get_product_by_name(self, product_name: str) -> Optional[Dict[str, Any]]:
-        query = "SELECT id, name, description, price, stock, category, sku, image_url, variant_of_id, attributes, is_active, created_at FROM products WHERE name = $1 AND shop_id = $2"
+        query = "SELECT * FROM products WHERE name = $1 AND shop_id = $2 AND variant_of_id IS NULL"
         return await self.fetch_one(query, product_name, self.shop_id)
+
+    async def get_product_variant(self, parent_id: int, attributes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Find a specific variant of a product based on attributes.
+        attributes is a dict like {'size': 'L', 'color': 'Red'}
+        """
+        query = "SELECT * FROM products WHERE variant_of_id = $1 AND shop_id = $2 AND attributes @> $3"
+        return await self.fetch_one(query, parent_id, self.shop_id, json.dumps(attributes))
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"

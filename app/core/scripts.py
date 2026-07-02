@@ -15,6 +15,8 @@ SCRIPTS_MAP = {
     "ASK_TOWNSHIP": "ဟုတ်ကဲ့ပါရှင်။ မြို့နယ် (Township) လေး ပြောပေးပါဦးရှင်။",
     "ASK_SIZE": "ပစ္စည်းအတွက် 'ဆိုဒ် (Size)' လေး ဘယ်လောက်ယူမလဲရှင်။",
     "ASK_COLOR": "ပစ္စည်းအတွက် 'အရောင် (Color)' လေး ဘာယူမလဲရှင်။",
+    "ASK_SUGAR_LEVEL": "အချိုဓာတ် (Sugar Level) ဘယ်လောက်ထားမလဲရှင်။",
+    "ASK_ICE_LEVEL": "ရေခဲ (Ice Level) ဘယ်လောက်ထားမလဲရှင်။",
     "ASK_QUANTITY": "အရေအတွက် ဘယ်လောက်ယူမလဲရှင်။",
     
     # Payment Flow
@@ -34,7 +36,7 @@ SCRIPTS_MAP = {
     "OUT_OF_STOCK": "စိတ်မကောင်းပါဘူးရှင်။ မှာယူလိုက်တဲ့ ပစ္စည်းက လက်ရှိ စတော့ကုန်သွားလို့ မှာယူလို့ မရနိုင်တော့ပါဘူးရှင်။ တခြားပစ္စည်းလေးများ မှာယူချင်ပါသလားရှင်။ 🙇‍♂️",
     "CONVERSATION_RESET": "ဟုတ်ကဲ့ပါရှင်။ အော်ဒါအသစ်စတင်ပါပြီ။ ဘာပစ္စည်းလေး မှာယူချင်ပါသလဲ ရှင့်။ 🙏",
     "NEW_ORDER_INITIATED": "ဟုတ်ကဲ့ပါရှင်။ အော်ဒါအသစ်စတင်ပါပြီ။ ဘာပစ္စည်းလေး မှာယူချင်ပါသလဲ ရှင့်။ 🙏",
-    "ORDER_SUMMARY": "လက်ရှိ မှာယူထားသော ပစ္စည်းများစာရင်း:\n{order_summary_details}\nစုစုပေါင်း: {total_price} ကျပ်။\n\nအမည်: {customer_name}\nဖုန်းနံပါတ်: {phone_no}\nလိပ်စာ: {address}\n\nပြင်ဆင်လိုပါက 'add item', 'remove item', 'change quantity', 'change name', 'change phone', 'change address' စသည်ဖြင့် ပြောနိုင်ပါတယ်ရှင်။ အတည်ပြုလိုပါက 'confirm order' ဟု ပြောနိုင်ပါတယ်ရှင်။"
+    "ORDER_SUMMARY": "📝 အော်ဒါအကျဉ်းချုပ်\n\n{order_summary_details}\n\n💰 စုစုပေါင်း: {total_price} ကျပ်\n\n👤 အမည်: {customer_name}\n📞 ဖုန်း: {phone_no}\n📍 လိပ်စာ: {address}\n💳 ငွေပေးချေမှု: {payment_method}\n\nအချက်အလက်များ မှန်ကန်ပါက ✅ 'Confirm Order' ကို နှိပ်ပါ သို့မဟုတ် ပြောပေးပါရှင်။\nဖျက်သိမ်းလိုပါက ❌ 'Cancel Order' ဟု ပြောနိုင်ပါတယ်ရှင်။"
 }
 
 def get_script(status_key: str, **kwargs) -> str:

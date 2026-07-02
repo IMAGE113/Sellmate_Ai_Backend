@@ -181,49 +181,72 @@ async def run_worker():
                     elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
                         await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
                     elif status_key == "ORDER_CONFIRMED":
-                        # Duplicate protection for stock deduction
-                        if not new_extracted_data.get("stock_deducted", False):
-                            all_stock_available = True
-                            for item in new_extracted_data.get("items", []):
-                                product_name = item.get("name")
-                                quantity = item.get("qty", 0)
-                                if product_name and quantity > 0:
-                                    product = await product_repo.get_product_by_name(product_name)
-                                    if not product or product["stock"] < quantity:
-                                        all_stock_available = False
-                                        status_key = "OUT_OF_STOCK"
-                                        break
-                            
-                            if all_stock_available:
+                        # Only finalize if the customer explicitly confirmed
+                        if intent == "CONFIRM_ORDER":
+                            # Duplicate protection for stock deduction and finalization
+                            if not new_extracted_data.get("is_finalized", False):
+                                all_stock_available = True
+                                items_to_deduct = []
+                                
                                 for item in new_extracted_data.get("items", []):
                                     product_name = item.get("name")
                                     quantity = item.get("qty", 0)
                                     if product_name and quantity > 0:
-                                        product = await product_repo.get_product_by_name(product_name)
-                                        await product_repo.update_product_stock(product["id"], quantity)
-                                # Mark stock as deducted to prevent duplicates
-                                new_extracted_data["stock_deducted"] = True
-                                await order_repo.execute(
-                                    "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                                    json.dumps(new_extracted_data), order["id"]
-                                )
-                                # Duplicate protection for payment confirmation
-                                if not new_extracted_data.get("payment_confirmed", False):
-                                    new_extracted_data["payment_confirmed"] = True
+                                        parent_product = await product_repo.get_product_by_name(product_name)
+                                        if not parent_product:
+                                            all_stock_available = False
+                                            break
+                                        
+                                        # Check for variants
+                                        attributes = {k: v for k, v in item.items() if k in ["size", "color", "sugar_level", "ice_level"]}
+                                        if attributes:
+                                            product = await product_repo.get_product_variant(parent_product["id"], attributes)
+                                        else:
+                                            product = parent_product
+                                            
+                                        if not product or product["stock"] < quantity:
+                                            all_stock_available = False
+                                            break
+                                        items_to_deduct.append((product["id"], quantity))
+                                
+                                if all_stock_available:
+                                    # Calculate total price based on menu prices
+                                    total_price = 0
+                                    for item in new_extracted_data.get("items", []):
+                                        product_name = item.get("name")
+                                        quantity = item.get("qty", 0)
+                                        price = next((p["price"] for p in menu if p["name"] == product_name), 0)
+                                        total_price += float(price) * quantity
+
+                                    # Deduct Stock
+                                    for product_id, quantity in items_to_deduct:
+                                        await product_repo.update_product_stock(product_id, quantity)
+                                    
+                                    # Finalize Order and Sync Dashboard
+                                    new_extracted_data["is_finalized"] = True
+                                    customer_name = new_extracted_data.get("customer_name") or order.get("customer_name")
+                                    
                                     await order_repo.execute(
-                                        "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                                        json.dumps(new_extracted_data), order["id"]
+                                        """UPDATE orders SET 
+                                            extracted_data = $1, 
+                                            customer_name = $2,
+                                            total_price = $3,
+                                            status = 'COMPLETED',
+                                            updated_at = CURRENT_TIMESTAMP 
+                                        WHERE id = $4""",
+                                        json.dumps(new_extracted_data), customer_name, Decimal(str(total_price)), order["id"]
                                     )
-                                    await order_service.update_status(order["id"], "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
+                                    
+                                    await audit_repo.log_event("ORDER_FINALIZED", "bot", "Order confirmed, stock deducted, and finalized", order["id"], {"total_price": total_price})
+                                    status_key = "ORDER_CONFIRMED" # Final success message
                                 else:
-                                    logging.info(f"Payment already confirmed for order {order["id"]}. Skipping duplicate confirmation.")
+                                    status_key = "OUT_OF_STOCK"
+                                    await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Insufficient stock during confirmation")
                             else:
-                                # If stock is insufficient, the status_key will be set to OUT_OF_STOCK by the flow manager
-                                # If stock is insufficient, the status_key will be set to OUT_OF_STOCK.
-                                # Call update_status here to reflect the OUT_OF_STOCK status immediately.
-                                await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+                                logging.info(f"Order {order['id']} already finalized. Skipping duplicate logic.")
                         else:
-                            logging.info(f"Stock already deducted for order {order['id']}. Skipping duplicate deduction.")
+                            # If not explicitly confirmed, show summary
+                            status_key = "ORDER_SUMMARY"
                     elif status_key == "OUT_OF_STOCK":
                         # As per Fix 5, do not cancel immediately. FlowManager will handle the response.
                         await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
@@ -237,7 +260,7 @@ async def run_worker():
                             )
                             await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
                         else:
-                            logging.info(f"Payment already pending review for order {order["id"]}. Skipping duplicate status update.")
+                            logging.info(f"Payment already pending review for order {order['id']}. Skipping duplicate status update.")
                     elif status_key == "ORDER_READY_TO_SHIP":
                         await order_service.update_status(order["id"], "READY_TO_SHIP", "bot", "Order ready to ship")
                     elif status_key == "ORDER_COMPLETED":
@@ -271,7 +294,8 @@ async def run_worker():
                         total_price=f"{total_price:.2f}",
                         customer_name=new_extracted_data.get("customer_name", "N/A"),
                         phone_no=new_extracted_data.get("phone_no", "N/A"),
-                        address=new_extracted_data.get("address", "N/A")
+                        address=new_extracted_data.get("address", "N/A"),
+                        payment_method=new_extracted_data.get("payment_method", "N/A")
                     )
                 else:
                     reply_text = flow.get_response(status_key, biz["name"])

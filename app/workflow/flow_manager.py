@@ -43,11 +43,17 @@ class FlowManager:
         if not self.order_data.get("township"):
             return "ASK_TOWNSHIP"
         
-        if self.settings.get("setting_require_size") and not self.has_all_sizes():
+        if self.settings.get("setting_require_size") and not self.has_all_attributes("size"):
             return "ASK_SIZE"
             
-        if self.settings.get("setting_require_color") and not self.has_all_colors():
+        if self.settings.get("setting_require_color") and not self.has_all_attributes("color"):
             return "ASK_COLOR"
+
+        if self.settings.get("setting_require_sugar_level") and not self.has_all_attributes("sugar_level"):
+            return "ASK_SUGAR_LEVEL"
+
+        if self.settings.get("setting_require_ice_level") and not self.has_all_attributes("ice_level"):
+            return "ASK_ICE_LEVEL"
 
         if not self.order_data.get("payment_method"):
             return "ASK_PAYMENT_METHOD"
@@ -63,22 +69,17 @@ class FlowManager:
 
         return "ORDER_CONFIRMED"
 
-    def has_all_sizes(self) -> bool:
+    def has_all_attributes(self, attribute_name: str) -> bool:
         for item in self.order_data.get("items", []):
-            if not item.get("size"):
+            # If the item itself doesn't have the attribute, we check if it's required for this product
+            # For now, we assume if the setting is on, it's required for all items in the order
+            if not item.get(attribute_name):
                 return False
         return True
 
-    def has_all_colors(self) -> bool:
-        for item in self.order_data.get("items", []):
-            if not item.get("color"):
-                return False
-        return True
-
-    def get_response(self, status_key: str, shop_name: str, order_summary: Optional[str] = None) -> str:
-        if status_key == "ORDER_SUMMARY":
-            return order_summary if order_summary else get_script(status_key, shop_name=shop_name)
-        return get_script(status_key, shop_name=shop_name)
+    def get_response(self, status_key: str, shop_name: str, **kwargs) -> str:
+        # kwargs will contain order_summary_details, total_price, customer_name, etc.
+        return get_script(status_key, shop_name=shop_name, **kwargs)
 
     def _is_reset_command(self, user_text: str) -> bool:
         reset_keywords = ["restart", "new order", "start over", "cancel order"]
