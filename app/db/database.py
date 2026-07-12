@@ -19,6 +19,17 @@ async def init_db(pool):
             schema_sql = f.read()
         async with pool.acquire() as conn:
             await conn.execute(schema_sql)
+            # Backfill columns on databases created before these columns were
+            # added to schema.sql. CREATE TABLE IF NOT EXISTS does not add new
+            # columns to a pre-existing table, which caused
+            # 'column "sku" does not exist' on drifted deployments.
+            await conn.execute("""
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50) UNIQUE;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+            """)
 
 class BaseRepository:
     def __init__(self, pool: asyncpg.Pool, shop_id: str):
@@ -91,27 +102,31 @@ class MerchantRepository(BaseRepository):
 
 class ProductRepository(BaseRepository):
     async def get_product_by_name(self, product_name: str) -> Optional[Dict[str, Any]]:
-        query = "SELECT id, name, stock FROM products WHERE name = $1 AND shop_id = $2"
+        query = "SELECT * FROM products WHERE name = $1 AND shop_id = $2 AND variant_of_id IS NULL"
         return await self.fetch_one(query, product_name, self.shop_id)
+
+    async def get_product_variant(self, parent_id: int, attributes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Find a specific variant of a product based on attributes.
+        attributes is a dict like {'size': 'L', 'color': 'Red'}
+        """
+        query = "SELECT * FROM products WHERE variant_of_id = $1 AND shop_id = $2 AND attributes @> $3"
+        return await self.fetch_one(query, parent_id, self.shop_id, json.dumps(attributes))
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
         await self.execute(query, quantity, product_id, self.shop_id)
 
-    async def get_variants_for_product(self, product_id: int) -> List[Dict[str, Any]]:
-        query = "SELECT id, variant_name, stock FROM product_variants WHERE product_id = $1 AND shop_id = $2 AND is_active = TRUE"
-        return await self.fetch_all(query, product_id, self.shop_id)
-
-    async def update_variant_stock(self, variant_id: int, quantity: int) -> None:
-        query = "UPDATE product_variants SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
-        await self.execute(query, quantity, variant_id, self.shop_id)
+    async def get_variants_for_product(self, parent_id: int) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM products WHERE variant_of_id = $1 AND shop_id = $2 AND is_active = TRUE"
+        return await self.fetch_all(query, parent_id, self.shop_id)
 
 
 class AuditRepository(BaseRepository):
     async def log_event(self, event_type: str, actor_source: str, description: str = None, order_id: int = None, details: Dict = None):
         query = """
             INSERT INTO audit_logs (business_id, shop_id, order_id, event_type, description, actor_source, details)
-            SELECT id, shop_id, $1, $2, $3, $4, $5 FROM businesses WHERE shop_id = $6
+            SELECT id, shop_id, $1::int, $2::varchar, $3::text, $4::varchar, $5::jsonb FROM businesses WHERE shop_id = $6
         """
         await self.execute(query, order_id, event_type, description, actor_source, json.dumps(details or {}), self.shop_id)
 

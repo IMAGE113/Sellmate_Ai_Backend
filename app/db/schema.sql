@@ -39,25 +39,14 @@ CREATE TABLE IF NOT EXISTS products (
     price DECIMAL(12, 2) NOT NULL,
     stock INTEGER DEFAULT 0,
     category VARCHAR(50),
+    sku VARCHAR(50) UNIQUE,
+    image_url TEXT,
+    variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+    attributes JSONB DEFAULT '{}'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_products_shop_id ON products(shop_id);
-
--- 3.1 Product Variants
-CREATE TABLE IF NOT EXISTS product_variants (
-    id SERIAL PRIMARY KEY,
-    product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-    shop_id VARCHAR(50) REFERENCES businesses(shop_id),
-    variant_name VARCHAR(100) NOT NULL, -- e.g., 'Small', 'Large', 'Red', 'Blue'
-    price DECIMAL(12, 2), -- Optional: Override parent price
-    stock INTEGER DEFAULT 0,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(product_id, variant_name)
-);
-CREATE INDEX IF NOT EXISTS idx_variants_product_id ON product_variants(product_id);
-CREATE INDEX IF NOT EXISTS idx_variants_shop_id ON product_variants(shop_id);
 
 -- 4. Orders
 CREATE TABLE IF NOT EXISTS orders (

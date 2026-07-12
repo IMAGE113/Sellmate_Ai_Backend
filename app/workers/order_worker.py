@@ -109,6 +109,34 @@ async def run_worker():
                 # 🛡️ [SAFE FIX 1] Order ရဲ့ extracted_data က String ဖြစ်နေရင် dict ဖြစ်အောင် အတင်းပြောင်းလိုက်မယ်
                 order = dict(order_raw) if order_raw else {}
                 order["extracted_data"] = force_dict(order.get("extracted_data", {}))
+
+                # Check for reset commands or new order initiation
+                flow_manager_temp = FlowManager(biz, order["extracted_data"])
+                if flow_manager_temp._is_reset_command(user_text):
+                    logging.info(f"Reset command detected for {shop_id}:{chat_id}. Resetting order.")
+                    await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled by user reset command")
+                    await order_repo.execute(
+                        "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                        json.dumps({}), order["id"]
+                    )
+                    # Create a new order for the next interaction
+                    order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
+                    order = dict(order_raw) if order_raw else {}
+                    order["extracted_data"] = force_dict(order.get("extracted_data", {}))
+                    # Override user_text to trigger a fresh greeting
+                    user_text = "Hello"
+                    # Skip further processing for this cycle as a new order has been initiated
+                    await queue_manager.complete(task["id"])
+                    continue
+                elif order.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK"] and flow_manager_temp.get_next_step(intent="ORDER", user_text=user_text) == "NEW_ORDER_INITIATED":
+                    logging.info(f"New order initiated for {shop_id}:{chat_id} after terminal state.")
+                    order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
+                    order = dict(order_raw) if order_raw else {}
+                    order["extracted_data"] = force_dict(order.get("extracted_data", {}))
+                    user_text = "Hello" # Trigger a fresh greeting for the new order
+                    # Skip further processing for this cycle as a new order has been initiated
+                    await queue_manager.complete(task["id"])
+                    continue
                 
                 # 6. Fetch Menu
                 menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
@@ -153,68 +181,113 @@ async def run_worker():
                     elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
                         await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
                     elif status_key == "ORDER_CONFIRMED":
-                        # Deduct stock for confirmed orders
-                        all_stock_available = True
-                        items_to_deduct = [] # List of (type, id, qty)
-                        
-                        for item in new_extracted_data.get("items", []):
-                            product_name = item.get("name")
-                            quantity = item.get("qty", 0)
-                            if not product_name or quantity <= 0:
-                                continue
+                        # Only finalize if the customer explicitly confirmed
+                        if intent == "CONFIRM_ORDER":
+                            # Duplicate protection for stock deduction and finalization
+                            if not new_extracted_data.get("is_finalized", False):
+                                all_stock_available = True
+                                items_to_deduct = []
                                 
-                            product = await product_repo.get_product_by_name(product_name)
-                            if not product:
-                                all_stock_available = False
-                                status_key = "OUT_OF_STOCK"
-                                break
+                                for item in new_extracted_data.get("items", []):
+                                    product_name = item.get("name")
+                                    quantity = item.get("qty", 0)
+                                    if product_name and quantity > 0:
+                                        parent_product = await product_repo.get_product_by_name(product_name)
+                                        if not parent_product:
+                                            all_stock_available = False
+                                            break
+                                        
+                                        # Check for variants (BUG-001 transplant)
+                                        variants = await product_repo.get_variants_for_product(parent_product["id"])
+                                        if variants:
+                                            # Try attribute match first (Stable logic)
+                                            attributes = {k: v for k, v in item.items() if k in ["size", "color", "sugar_level", "ice_level"]}
+                                            product = None
+                                            if attributes:
+                                                product = await product_repo.get_product_variant(parent_product["id"], attributes)
+                                            
+                                            # If no attribute match, try keyword match in details (BUG-001 logic)
+                                            if not product:
+                                                details = item.get("details", "").lower()
+                                                for v in variants:
+                                                    if v["name"].lower() in details:
+                                                        product = v
+                                                        break
+                                            
+                                            if product:
+                                                if product["stock"] < quantity:
+                                                    all_stock_available = False
+                                                    status_key = "OUT_OF_STOCK"
+                                                    break
+                                                items_to_deduct.append((product["id"], quantity))
+                                            else:
+                                                # Product has variants but no match found (BUG-001 fix)
+                                                all_stock_available = False
+                                                status_key = "INVALID_VARIANT"
+                                                available_names = ", ".join([v["name"] for v in variants])
+                                                reply_context = {"product_name": product_name, "available_variants": available_names}
+                                                break
+                                        else:
+                                            # Product has NO variants. Use parent stock directly.
+                                            product = parent_product
+                                            if not product or product["stock"] < quantity:
+                                                all_stock_available = False
+                                                status_key = "OUT_OF_STOCK"
+                                                break
+                                            items_to_deduct.append((product["id"], quantity))
                                 
-                            # Check for variants
-                            variants = await product_repo.get_variants_for_product(product["id"])
-                            if variants:
-                                # Product HAS variants. Try to match extracted details.
-                                details = item.get("details", "").lower()
-                                matched_variant = None
-                                for v in variants:
-                                    if v["variant_name"].lower() in details:
-                                        matched_variant = v
-                                        break
-                                
-                                if matched_variant:
-                                    if matched_variant["stock"] < quantity:
-                                        all_stock_available = False
-                                        status_key = "OUT_OF_STOCK"
-                                        break
-                                    items_to_deduct.append(("variant", matched_variant["id"], quantity))
+                                if all_stock_available:
+                                    # Calculate total price based on menu prices
+                                    total_price = 0
+                                    for item in new_extracted_data.get("items", []):
+                                        product_name = item.get("name")
+                                        quantity = item.get("qty", 0)
+                                        price = next((p["price"] for p in menu if p["name"] == product_name), 0)
+                                        total_price += float(price) * quantity
+
+                                    # Deduct Stock
+                                    for product_id, quantity in items_to_deduct:
+                                        await product_repo.update_product_stock(product_id, quantity)
+                                    
+                                    # Finalize Order and Sync Dashboard
+                                    new_extracted_data["is_finalized"] = True
+                                    customer_name = new_extracted_data.get("customer_name") or order.get("customer_name")
+                                    
+                                    await order_repo.execute(
+                                        """UPDATE orders SET 
+                                            extracted_data = $1, 
+                                            customer_name = $2,
+                                            total_price = $3,
+                                            status = 'COMPLETED',
+                                            updated_at = CURRENT_TIMESTAMP 
+                                        WHERE id = $4""",
+                                        json.dumps(new_extracted_data), customer_name, Decimal(str(total_price)), order["id"]
+                                    )
+                                    
+                                    await audit_repo.log_event("ORDER_FINALIZED", "bot", "Order confirmed, stock deducted, and finalized", order["id"], {"total_price": total_price})
+                                    status_key = "ORDER_CONFIRMED" # Final success message
                                 else:
-                                    # Product has variants but no match found
-                                    all_stock_available = False
-                                    status_key = "INVALID_VARIANT"
-                                    available_names = ", ".join([v["variant_name"] for v in variants])
-                                    # We need to pass these to the response generator later
-                                    reply_context = {"product_name": product_name, "available_variants": available_names}
-                                    break
-                            else:
-                                # Product has NO variants. Use parent stock directly.
-                                if product["stock"] < quantity:
-                                    all_stock_available = False
                                     status_key = "OUT_OF_STOCK"
-                                    break
-                                items_to_deduct.append(("product", product["id"], quantity))
-                        
-                        if all_stock_available:
-                            for type, id, qty in items_to_deduct:
-                                if type == "variant":
-                                    await product_repo.update_variant_stock(id, qty)
-                                else:
-                                    await product_repo.update_product_stock(id, qty)
-                            await order_service.update_status(order["id"], "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
+                                    await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Insufficient stock during confirmation")
+                            else:
+                                logging.info(f"Order {order['id']} already finalized. Skipping duplicate logic.")
                         else:
-                            await order_service.update_status(order["id"], "CANCELLED", "bot", f"Order failed: {status_key}")
+                            # If not explicitly confirmed, show summary
+                            status_key = "ORDER_SUMMARY"
                     elif status_key == "OUT_OF_STOCK":
-                        await order_service.update_status(order["id"], "CANCELLED", "bot", "Order cancelled due to insufficient stock")
+                        # As per Fix 5, do not cancel immediately. FlowManager will handle the response.
+                        await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
                     elif status_key == "PAYMENT_RECEIVED_WAITING_REVIEW":
-                        await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
+                        # Duplicate protection for payment pending review
+                        if not new_extracted_data.get("payment_pending_review", False):
+                            new_extracted_data["payment_pending_review"] = True
+                            await order_repo.execute(
+                                "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                                json.dumps(new_extracted_data), order["id"]
+                            )
+                            await order_service.update_status(order["id"], "PAYMENT_PENDING_REVIEW", "bot", "Payment screenshot received, waiting for review")
+                        else:
+                            logging.info(f"Payment already pending review for order {order['id']}. Skipping duplicate status update.")
                     elif status_key == "ORDER_READY_TO_SHIP":
                         await order_service.update_status(order["id"], "READY_TO_SHIP", "bot", "Order ready to ship")
                     elif status_key == "ORDER_COMPLETED":
@@ -228,11 +301,33 @@ async def run_worker():
                     logging.error(f"⚠️ Status Synchronization Error (Non-fatal): {str(status_err)}")
 
                 # 11. Generate Response
+                reply_text = ""
                 if status_key == "INVALID_VARIANT" and 'reply_context' in locals():
-                    reply_text = flow.get_response(status_key, biz["name"])
-                    # Format with extra context
+                    # Format with extra context (BUG-001 transplant)
                     from app.core.scripts import get_script
                     reply_text = get_script(status_key, **reply_context)
+                elif status_key == "ORDER_SUMMARY":
+                    # Generate order summary
+                    order_summary_details = []
+                    total_price = 0
+                    for item in new_extracted_data.get("items", []):
+                        product_name = item.get("name", "Unknown Item")
+                        quantity = item.get("qty", 0)
+                        price = next((p["price"] for p in menu if p["name"] == product_name), 0)
+                        item_total = price * quantity
+                        total_price += item_total
+                        order_summary_details.append(f"{product_name} x {quantity} ({item_total:.2f} ကျပ်)")
+                    
+                    reply_text = flow.get_response(
+                        status_key,
+                        biz["name"],
+                        order_summary_details="\n".join(order_summary_details),
+                        total_price=f"{total_price:.2f}",
+                        customer_name=new_extracted_data.get("customer_name", "N/A"),
+                        phone_no=new_extracted_data.get("phone_no", "N/A"),
+                        address=new_extracted_data.get("address", "N/A"),
+                        payment_method=new_extracted_data.get("payment_method", "N/A")
+                    )
                 else:
                     reply_text = flow.get_response(status_key, biz["name"])
                 
