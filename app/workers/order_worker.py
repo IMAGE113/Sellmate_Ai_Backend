@@ -297,16 +297,19 @@ async def run_worker():
                                     # Custom confirmation response with Order Number
                                     reply_context["order_id"] = order_number
                                 else:
-                                    status_key = "OUT_OF_STOCK"
-                                    await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Insufficient stock during confirmation")
+                                    # Task 2 Fix: Preserve specific failure status (OUT_OF_STOCK or INVALID_VARIANT)
+                                    # status_key is already set in the loop above
+                                    await order_service.update_status(order["id"], status_key, "bot", f"Confirmation failed: {status_key}")
                             else:
                                 logging.info(f"Order {order['id']} already finalized. Skipping duplicate logic.")
                         else:
                             # If not explicitly confirmed, show summary
                             status_key = "ORDER_SUMMARY"
-                    elif status_key == "OUT_OF_STOCK":
+                    elif status_key in ["OUT_OF_STOCK", "INVALID_VARIANT"]:
                         # As per Fix 5, do not cancel immediately. FlowManager will handle the response.
-                        await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+                        # Only update status if it's not already set (to avoid duplicate logs)
+                        if order["status"] != status_key:
+                            await order_service.update_status(order["id"], status_key, "bot", f"Bot informing customer about {status_key}")
                     elif status_key == "PAYMENT_RECEIVED_WAITING_REVIEW":
                         # Duplicate protection for payment pending review
                         if not new_extracted_data.get("payment_pending_review", False):
