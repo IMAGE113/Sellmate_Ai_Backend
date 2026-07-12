@@ -29,6 +29,8 @@ async def init_db(pool):
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(20) UNIQUE;
+                CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
             """)
 
 class BaseRepository:

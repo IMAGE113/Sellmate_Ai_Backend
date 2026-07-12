@@ -20,7 +20,7 @@ class DashboardRepository(BaseRepository):
     async def get_recent_orders(self, limit: int = 10, offset: int = 0, status: str = None) -> List[Dict[str, Any]]:
         params = [self.shop_id, limit, offset]
         query = """
-            SELECT id, chat_id, customer_name, total_price, status, created_at
+            SELECT id, order_number, chat_id, customer_name, total_price, status, created_at
             FROM orders
             WHERE shop_id = $1
         """
@@ -40,13 +40,35 @@ class DashboardRepository(BaseRepository):
         return await self.fetch_all(query, self.shop_id)
 
     async def get_analytics(self) -> Dict[str, Any]:
+        # Task 2 & 3 Fix: Comprehensive analytics
+        # Revenue must increase immediately after confirmation (COMPLETED or PAYMENT_CONFIRMED)
+        # We also need today's and monthly stats
         query = """
+            WITH stats AS (
+                SELECT 
+                    COALESCE(SUM(total_price), 0) as total_revenue,
+                    COUNT(*) as total_orders,
+                    COUNT(DISTINCT chat_id) as total_customers,
+                    COALESCE(SUM(CASE WHEN created_at >= CURRENT_DATE THEN total_price ELSE 0 END), 0) as today_revenue,
+                    COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) as today_orders,
+                    COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', CURRENT_DATE) THEN total_price ELSE 0 END), 0) as monthly_revenue,
+                    COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) as monthly_orders
+                FROM orders
+                WHERE shop_id = $1 AND status NOT IN ('CANCELLED', 'FAILED', 'OUT_OF_STOCK')
+            ),
+            top_product AS (
+                SELECT item->>'name' as product_name, SUM((item->>'qty')::int) as total_sold
+                FROM orders, jsonb_array_elements(extracted_data->'items') as item
+                WHERE shop_id = $1 AND status NOT IN ('CANCELLED', 'FAILED', 'OUT_OF_STOCK')
+                GROUP BY product_name
+                ORDER BY total_sold DESC
+                LIMIT 1
+            )
             SELECT 
-                COALESCE(SUM(total_price), 0) as total_revenue,
-                COUNT(*) as total_orders,
-                COUNT(DISTINCT chat_id) as total_customers
-            FROM orders
-            WHERE shop_id = $1 AND status = 'COMPLETED'
+                s.*,
+                COALESCE(tp.product_name, 'Not Available') as top_selling_product
+            FROM stats s
+            LEFT JOIN top_product tp ON TRUE
         """
         return await self.fetch_one(query, self.shop_id)
 
@@ -83,14 +105,37 @@ class DashboardRepository(BaseRepository):
         bot_token = settings.get("bot_token")
         
         # ၁။ အရင်ဆုံး ဒေတာဘေ့စ်ရဲ့ tg_bot_token ထဲ ကွက်တိ သွားသိမ်းမယ်
-        query = """
+        # Task 1 Fix: Also update other merchant settings if provided
+        update_fields = ["tg_bot_token = $1"]
+        params = [bot_token]
+        
+        if "name" in settings:
+            update_fields.append(f"name = ${len(params)+1}")
+            params.append(settings["name"])
+        if "owner_name" in settings:
+            update_fields.append(f"owner_name = ${len(params)+1}")
+            params.append(settings["owner_name"])
+        if "phone" in settings:
+            update_fields.append(f"phone = ${len(params)+1}")
+            params.append(settings["phone"])
+        if "category" in settings:
+            update_fields.append(f"category = ${len(params)+1}")
+            params.append(settings["category"])
+        
+        # Handle workflow_config updates
+        if "workflow_config" in settings:
+            update_fields.append(f"workflow_config = ${len(params)+1}")
+            params.append(json.dumps(settings["workflow_config"]))
+            
+        params.append(self.shop_id)
+        query = f"""
             UPDATE businesses 
-            SET tg_bot_token = $1,
+            SET {", ".join(update_fields)},
                 updated_at = NOW() 
-            WHERE shop_id = $2
+            WHERE shop_id = ${len(params)}
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, bot_token, self.shop_id)
+            await conn.execute(query, *params)
             
         # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
         if bot_token:

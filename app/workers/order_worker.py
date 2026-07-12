@@ -92,10 +92,20 @@ async def run_worker():
                 order_service = OrderService(order_repo, audit_repo)
 
                 # 4. Fetch business info
-                biz = await merchant_repo.get_merchant_by_shop_id()
-                if not biz:
+                biz_raw = await merchant_repo.get_merchant_by_shop_id()
+                if not biz_raw:
                     await queue_manager.fail(task["id"], f"Merchant {shop_id} not found", can_retry=False)
                     continue
+                
+                # Flatten workflow_config into biz dictionary for FlowManager
+                biz = dict(biz_raw)
+                workflow_config = biz.get("workflow_config") or {}
+                if isinstance(workflow_config, str):
+                    try:
+                        workflow_config = json.loads(workflow_config)
+                    except:
+                        workflow_config = {}
+                biz.update(workflow_config)
 
                 # 4. Human Takeover Check
                 if biz.get("is_human_takeover_active"):
@@ -173,10 +183,17 @@ async def run_worker():
                 
                 # 10. Handle Intent/Status Actions and Synchronize workflow status with order status
                 try:
-                    if status_key == "HUMAN_TAKEOVER":
+                    if status_key == "MENU_INFO":
+                        # Task 5: Generate live stock info for the response
+                        stock_info_parts = []
+                        for item in menu:
+                            stock_info_parts.append(f"{item['name']} - {item['stock']} ခုကျန်ပါသေးတယ်")
+                        reply_context["stock_info"] = "\n".join(stock_info_parts)
+                        await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", "Bot providing menu/stock info")
+                    elif status_key == "HUMAN_TAKEOVER":
                         await merchant_repo.execute("UPDATE businesses SET is_human_takeover_active = TRUE WHERE id = $1", biz["id"])
                         await audit_repo.log_event("HUMAN_TAKEOVER_START", "bot", "User requested human", order["id"])
-                    elif status_key in ["GREETING", "ASK_ITEMS", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR", "MENU_INFO"]:
+                    elif status_key in ["GREETING", "ASK_ITEMS", "ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP", "ASK_SIZE", "ASK_COLOR"]:
                         await order_service.update_status(order["id"], "COLLECTING_INFO", "bot", f"Bot asking for: {status_key}")
                     elif status_key in ["ASK_PAYMENT_METHOD", "ASK_PAYMENT_SCREENSHOT"]:
                         await order_service.update_status(order["id"], "WAITING_PAYMENT", "bot", f"Bot asking for: {status_key}")
@@ -218,6 +235,8 @@ async def run_worker():
                                                 if product["stock"] < quantity:
                                                     all_stock_available = False
                                                     status_key = "OUT_OF_STOCK"
+                                                    reply_context["product_name"] = product["name"]
+                                                    reply_context["available_stock"] = product["stock"]
                                                     break
                                                 items_to_deduct.append((product["id"], quantity))
                                             else:
@@ -233,6 +252,8 @@ async def run_worker():
                                             if not product or product["stock"] < quantity:
                                                 all_stock_available = False
                                                 status_key = "OUT_OF_STOCK"
+                                                reply_context["product_name"] = product["name"] if product else product_name
+                                                reply_context["available_stock"] = product["stock"] if product else 0
                                                 break
                                             items_to_deduct.append((product["id"], quantity))
                                 
@@ -253,19 +274,28 @@ async def run_worker():
                                     new_extracted_data["is_finalized"] = True
                                     customer_name = new_extracted_data.get("customer_name") or order.get("customer_name")
                                     
+                                    # Generate Unique Order Number
+                                    from app.services.id_generator import generate_order_number
+                                    order_number = await generate_order_number(pool)
+                                    new_extracted_data["order_number"] = order_number
+                                    
                                     await order_repo.execute(
                                         """UPDATE orders SET 
                                             extracted_data = $1, 
                                             customer_name = $2,
                                             total_price = $3,
+                                            order_number = $4,
                                             status = 'COMPLETED',
                                             updated_at = CURRENT_TIMESTAMP 
-                                        WHERE id = $4""",
-                                        json.dumps(new_extracted_data), customer_name, Decimal(str(total_price)), order["id"]
+                                        WHERE id = $5""",
+                                        json.dumps(new_extracted_data), customer_name, Decimal(str(total_price)), order_number, order["id"]
                                     )
                                     
-                                    await audit_repo.log_event("ORDER_FINALIZED", "bot", "Order confirmed, stock deducted, and finalized", order["id"], {"total_price": total_price})
+                                    await audit_repo.log_event("ORDER_FINALIZED", "bot", "Order confirmed, stock deducted, and finalized", order["id"], {"total_price": total_price, "order_number": order_number})
                                     status_key = "ORDER_CONFIRMED" # Final success message
+                                    
+                                    # Custom confirmation response with Order Number
+                                    reply_context["order_id"] = order_number
                                 else:
                                     status_key = "OUT_OF_STOCK"
                                     await order_service.update_status(order["id"], "OUT_OF_STOCK", "bot", "Insufficient stock during confirmation")

@@ -59,12 +59,14 @@ CREATE TABLE IF NOT EXISTS orders (
     status VARCHAR(50) DEFAULT 'NEW_CHAT',
     extracted_data JSONB DEFAULT '{}'::jsonb,
     timeline JSONB DEFAULT '[]'::jsonb,
+    order_number VARCHAR(20) UNIQUE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_orders_shop_id ON orders(shop_id);
 CREATE INDEX IF NOT EXISTS idx_orders_chat_id ON orders(chat_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
 
 -- 5. Task Queue (Standardized Payload)
 CREATE TABLE IF NOT EXISTS task_queue (

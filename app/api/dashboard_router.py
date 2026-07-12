@@ -52,35 +52,107 @@ async def get_products(current_merchant = Depends(get_current_merchant)):
         )
         return [dict(row) for row in rows]
 
-# ✅ [POST PRODUCT] မင်းရဲ့ Neon DB ထဲက Column အစစ်တွေဖြစ်တဲ့ (name, price, stock, is_active) ထဲ ကွက်တိ ထည့်ပေးမှာဖြစ်လို့ အာမခံတယ် Bro
+# ✅ [PRODUCT & VARIANT CRUD] Full implementation for Task 6
 @router.post("/products")
 async def create_product(product_data: dict, current_merchant = Depends(get_current_merchant)):
     pool = await get_db_pool()
     shop_id = current_merchant["shop_id"]
     
-    product_name = product_data.get("product_name")
+    name = product_data.get("product_name") or product_data.get("name")
     price = product_data.get("price")
-    quantity = product_data.get("quantity", 0)
+    stock = product_data.get("quantity", 0) or product_data.get("stock", 0)
     status = product_data.get("status", "active")
+    variant_of_id = product_data.get("variant_of_id")
+    attributes = product_data.get("attributes", {})
+    sku = product_data.get("sku")
     
-    if not product_name or price is None:
+    if not name or price is None:
         raise HTTPException(status_code=400, detail="Product name and price are required")
         
-    is_active_bool = True if status == "active" else False
+    is_active = True if status == "active" else False
     
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO products (shop_id, name, price, stock, is_active, created_at)
-                VALUES ($1, $2, $3, $4, $5, NOW())
+                INSERT INTO products (shop_id, name, price, stock, is_active, variant_of_id, attributes, sku, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NOW())
                 RETURNING id as product_id, name as product_name, price, stock as quantity,
                           CASE WHEN is_active = true THEN 'active' ELSE 'inactive' END as status,
-                          created_at as created_date
+                          variant_of_id, attributes, sku, created_at as created_date
                 """,
-                shop_id, product_name, float(price), int(quantity), is_active_bool
+                shop_id, name, float(price), int(stock), is_active, variant_of_id, json.dumps(attributes), sku
             )
             return {"success": True, "data": dict(row) if row else {}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/products/{product_id}")
+async def update_product(product_id: int, product_data: dict, current_merchant = Depends(get_current_merchant)):
+    pool = await get_db_pool()
+    shop_id = current_merchant["shop_id"]
+    
+    update_fields = []
+    params = [shop_id, product_id]
+    
+    mapping = {
+        "product_name": "name",
+        "name": "name",
+        "price": "price",
+        "quantity": "stock",
+        "stock": "stock",
+        "status": "is_active",
+        "variant_of_id": "variant_of_id",
+        "attributes": "attributes",
+        "sku": "sku"
+    }
+    
+    for key, val in product_data.items():
+        if key in mapping:
+            col = mapping[key]
+            if key == "status":
+                val = True if val == "active" else False
+            elif key == "price":
+                val = float(val)
+            elif key in ["quantity", "stock"]:
+                val = int(val)
+            elif key == "attributes":
+                val = json.dumps(val)
+                
+            params.append(val)
+            update_fields.append(f"{col} = ${len(params)}")
+            
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+        
+    query = f"""
+        UPDATE products 
+        SET {", ".join(update_fields)}
+        WHERE shop_id = $1 AND id = $2
+        RETURNING id as product_id, name as product_name, price, stock as quantity,
+                  CASE WHEN is_active = true THEN 'active' ELSE 'inactive' END as status,
+                  variant_of_id, attributes, sku, created_at as created_date
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, *params)
+            if not row:
+                raise HTTPException(status_code=404, detail="Product not found")
+            return {"success": True, "data": dict(row)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/products/{product_id}")
+async def delete_product(product_id: int, current_merchant = Depends(get_current_merchant)):
+    pool = await get_db_pool()
+    shop_id = current_merchant["shop_id"]
+    
+    try:
+        async with pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM products WHERE shop_id = $1 AND id = $2", shop_id, product_id)
+            if result == "DELETE 0":
+                raise HTTPException(status_code=404, detail="Product not found")
+            return {"success": True, "message": "Product deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

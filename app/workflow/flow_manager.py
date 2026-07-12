@@ -31,13 +31,14 @@ class FlowManager:
         if not self.order_data.get("items"):
             return "ASK_ITEMS"
         
-        if self.settings.get("setting_require_name") and not self.order_data.get("customer_name"):
+        # Task 1: Enforce required customer information
+        if not self.order_data.get("customer_name"):
             return "ASK_NAME"
         
-        if self.settings.get("setting_require_phone") and not self.order_data.get("phone_no"):
+        if not self.order_data.get("phone_no"):
             return "ASK_PHONE"
         
-        if self.settings.get("setting_require_address") and not self.order_data.get("address"):
+        if not self.order_data.get("address"):
             return "ASK_ADDRESS"
         
         if not self.order_data.get("township"):

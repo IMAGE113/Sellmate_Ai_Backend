@@ -16,6 +16,12 @@ class AI:
         if merchant_requirements:
             req_instruction = f"MERCHANT CUSTOM REQUIREMENTS: {merchant_requirements}"
 
+        # Task 5: Format menu with live stock info for AI context
+        menu_with_stock = []
+        for m in menu:
+            item_info = f"{m['name']} (Price: {m['price']}, Stock: {m.get('stock', 0)})"
+            menu_with_stock.append(item_info)
+
         return f"""
 Role: Structured Data Extractor for {shop_name}.
 {req_instruction}
@@ -24,6 +30,14 @@ TASK:
 Extract order details and customer information from the user's message.
 Return a JSON object with the extracted fields. 
 DO NOT generate a response to the user. ONLY extract data.
+
+INVENTORY AWARENESS:
+The menu below contains live stock data. 
+If the user asks about availability or stock, set intent to 'MENU_QUERY'.
+If the user tries to order more than available stock, still extract the data but the system will handle the rejection.
+
+MENU WITH LIVE STOCK:
+{json.dumps(menu_with_stock, ensure_ascii=False)}
 
 EXTRACTABLE FIELDS:
 - customer_name

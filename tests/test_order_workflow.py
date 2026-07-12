@@ -115,13 +115,13 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         flow_manager = FlowManager({}, {})
         self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_ITEMS")
 
-        # Test case 5: Ask for name
-        flow_manager = FlowManager({"setting_require_name": True}, {"items": [{"name": "item1"}]})
+        # Test case 5: Ask for name (Now hard-required in Task 1)
+        flow_manager = FlowManager({}, {"items": [{"name": "item1"}]})
         self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_NAME")
 
-        # Test case 6: Order confirmed
+        # Test case 6: Order confirmed (All fields must be present)
         flow_manager = FlowManager(
-            {"setting_require_name": False, "setting_require_phone": False, "setting_require_address": False},
+            {},
             {"items": [{"name": "item1"}], "customer_name": "test", "phone_no": "123", "address": "abc", "township": "xyz", "payment_method": "COD"}
         )
         self.assertEqual(flow_manager.get_next_step("ORDER"), "ORDER_CONFIRMED")

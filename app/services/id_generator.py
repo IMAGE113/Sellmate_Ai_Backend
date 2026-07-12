@@ -84,6 +84,30 @@ class IDGenerator:
         return True
     
     @staticmethod
+    async def generate_order_number(pool: asyncpg.Pool) -> str:
+        """
+        Generate a unique order number with the format: SM-ORD-XXXXXX
+        where XXXXXX is a sequential-like random number
+        """
+        import random
+        max_attempts = 10
+        for _ in range(max_attempts):
+            num = random.randint(1, 999999)
+            order_number = f"SM-ORD-{num:06d}"
+            
+            async with pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    "SELECT id FROM orders WHERE order_number = $1",
+                    order_number
+                )
+                if not existing:
+                    return order_number
+        
+        # Fallback to timestamp if collision persists
+        import time
+        return f"SM-ORD-{int(time.time()) % 1000000:06d}"
+
+    @staticmethod
     async def get_business_by_shop_id(pool: asyncpg.Pool, shop_id: str) -> Optional[dict]:
         """
         Retrieve business details by shop_id.
@@ -112,6 +136,10 @@ _id_generator = IDGenerator()
 async def generate_shop_id(pool: asyncpg.Pool) -> str:
     """Helper function to generate unique shop ID"""
     return await _id_generator.generate_unique_shop_id(pool)
+
+async def generate_order_number(pool: asyncpg.Pool) -> str:
+    """Helper function to generate unique order number"""
+    return await _id_generator.generate_order_number(pool)
 
 async def validate_shop_id(shop_id: str) -> bool:
     """Helper function to validate shop ID format"""
