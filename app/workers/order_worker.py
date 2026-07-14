@@ -368,7 +368,7 @@ async def run_worker():
                         payment_method=new_extracted_data.get("payment_method", "N/A")
                     )
                 else:
-                    reply_text = flow.get_response(status_key, biz["name"])
+                    reply_text = flow.get_response(status_key, biz["name"], **reply_context)
                 
                 # 12. Send Response
                 await send(biz["tg_bot_token"], chat_id, reply_text)
