@@ -10,28 +10,50 @@ class FlowManager:
         """
         Determine the next status_key based on intent and missing fields.
         """
-        # Check for conversation reset commands
+        # 1. Global Commands (Reset/Human) take absolute priority
         if user_text and self._is_reset_command(user_text):
             return "CONVERSATION_RESET"
 
         if intent == "HUMAN_TAKEOVER":
             return "HUMAN_TAKEOVER"
+
+        # 2. Check for missing required fields (Priority Flow)
+        # If any required info is missing, we MUST collect it before showing summary or handling other intents
+        missing_field_step = self._get_missing_field_step()
         
+        # 3. If we are in the middle of collecting info, ignore MENU_QUERY or premature SUMMARY requests
+        if missing_field_step:
+            # If the user explicitly asks for menu while we have items but are missing info,
+            # we can show menu, but otherwise we stick to collecting info.
+            # However, per requirements: "Do not switch to MENU_QUERY or STOCK_QUERY until the order flow is complete."
+            return missing_field_step
+
+        # 4. If all required info is collected, handle other intents
         if intent == "MENU_QUERY":
             return "MENU_INFO"
         
         if intent == "GREETING" and not self.order_data.get("items"):
             return "GREETING"
 
-        # If the intent is to view or edit the summary, return ORDER_SUMMARY
+        # 5. Summary and Confirmation (Only if all info is present)
         if intent in ["VIEW_SUMMARY", "EDIT_ORDER"]:
             return "ORDER_SUMMARY"
 
-        # Check for missing required fields in a specific order
+        # 6. Terminal states
+        if self.order_data.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK", "CONVERSATION_RESET"]:
+            return "NEW_ORDER_INITIATED"
+
+        # 7. Default behavior: Show summary if all info is present, otherwise ask for missing fields
+        # This acts as a safety net for any UNKNOWN intent or unrelated text
+        return "ORDER_SUMMARY"
+
+    def _get_missing_field_step(self) -> Optional[str]:
+        """
+        Internal helper to identify the first missing required field.
+        """
         if not self.order_data.get("items"):
             return "ASK_ITEMS"
         
-        # Task 1: Enforce required customer information
         if not self.order_data.get("customer_name"):
             return "ASK_NAME"
         
@@ -63,12 +85,8 @@ class FlowManager:
            self.settings.get("setting_require_payment_screenshot") and \
            not self.order_data.get("payment_screenshot_received"):
             return "ASK_PAYMENT_SCREENSHOT"
-
-        # If the order is in a terminal state, allow a new order to start
-        if self.order_data.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK", "CONVERSATION_RESET"]:
-            return "NEW_ORDER_INITIATED"
-
-        return "ORDER_CONFIRMED"
+            
+        return None
 
     def has_all_attributes(self, attribute_name: str) -> bool:
         for item in self.order_data.get("items", []):
