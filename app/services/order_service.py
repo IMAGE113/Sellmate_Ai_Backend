@@ -53,13 +53,17 @@ class OrderService:
             raise ValueError(f"Invalid transition from {current_status} to {new_status}")
         
         # Task 2 Fix: If order is cancelled, restore stock if it was previously finalized
-        if new_status == 'CANCELLED' and order.get('extracted_data', {}).get('is_finalized'):
+        extracted_data = order.get('extracted_data', {})
+        if isinstance(extracted_data, str):
             import json
+            try:
+                extracted_data = json.loads(extracted_data)
+            except:
+                extracted_data = {}
+        
+        if new_status == 'CANCELLED' and extracted_data.get('is_finalized'):
             from app.db.database import ProductRepository
             product_repo = ProductRepository(self.order_repo.pool, order['shop_id'])
-            extracted_data = order.get('extracted_data', {})
-            if isinstance(extracted_data, str):
-                extracted_data = json.loads(extracted_data)
             
             for item in extracted_data.get('items', []):
                 product_name = item.get('name')

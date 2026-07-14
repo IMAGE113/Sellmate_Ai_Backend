@@ -12,7 +12,7 @@ async def send(token: str, chat_id: int, text: str, reply_markup: dict = None):
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown"
+        "parse_mode": "HTML"
     }
 
     if reply_markup:

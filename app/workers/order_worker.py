@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 from app.db.database import get_db_pool, OrderRepository, MerchantRepository, AuditRepository, ProductRepository
 from app.services.ai import ai
+from app.services.ai_parser import ai_parser
 from app.services.order_service import OrderService
 from app.workflow.flow_manager import FlowManager
 from app.services.telegram import send
@@ -155,17 +156,14 @@ async def run_worker():
                 # 🛡️ [SAFE FIX 2] Menu ထဲက Decimal စျေးနှုန်းတွေကို အလိုအလျောက် JSON Safe ဖြစ်အောင် float ပြောင်းပေးမယ်
                 menu = make_json_safe(menu_raw)
 
-                # 7. AI Extraction
-                extracted_json = await ai.extract_data(
-                    user_text, 
-                    biz["name"], 
-                    menu, 
-                    order.get("extracted_data", {}),
-                    biz.get("requirements_text")
-                )
-                
-                # 🛡️ [SAFE FIX 3] AI ဆီက ပြန်လာတဲ့ Json ကို loads လုပ်ပြီး ဒေတာသန့်စင်မယ်
-                extracted_data = force_dict(json.loads(extracted_json) if isinstance(extracted_json, str) else extracted_json)
+                # 7. AI Extraction with Deterministic Fallback (Hybrid Parser)
+                ai_context = {
+                    "shop_name": biz["name"],
+                    "previous_data": order.get("extracted_data", {}),
+                    "requirements_text": biz.get("requirements_text")
+                }
+                extracted_data = await ai_parser.parse_message(user_text, ai_context, menu)
+                extracted_data = force_dict(extracted_data)
                 
                 # 8. Merge Data & Update Order
                 new_extracted_data = ai.merge_data(order.get("extracted_data", {}), extracted_data)
@@ -179,7 +177,15 @@ async def run_worker():
 
                 # 9. Workflow Management
                 flow = FlowManager(biz, new_extracted_data)
+                
+                # Re-calculate intent priority if we are in summary stage
+                # We check if the NEXT step would be summary, and if user confirmed, we force CONFIRM_ORDER intent
+                if flow.get_next_step("ORDER") == "ORDER_SUMMARY" and \
+                   ai_parser.detect_confirmation(user_text):
+                    intent = "CONFIRM_ORDER"
+                    
                 status_key = flow.get_next_step(intent)
+                reply_context = {}
                 
                 # 10. Handle Intent/Status Actions and Synchronize workflow status with order status
                 try:
@@ -244,7 +250,7 @@ async def run_worker():
                                                 all_stock_available = False
                                                 status_key = "INVALID_VARIANT"
                                                 available_names = ", ".join([v["name"] for v in variants])
-                                                reply_context = {"product_name": product_name, "available_variants": available_names}
+                                                reply_context.update({"product_name": product_name, "available_variants": available_names})
                                                 break
                                         else:
                                             # Product has NO variants. Use parent stock directly.

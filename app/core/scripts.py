@@ -37,7 +37,7 @@ SCRIPTS_MAP = {
     "INVALID_VARIANT": "စိတ်မကောင်းပါဘူးရှင်။ {product_name} အတွက် လူကြီးမင်း ရွေးချယ်လိုက်တဲ့ အမျိုးအစား မရှိပါဘူးရှင်။ {available_variants} ထဲက ရွေးချယ်ပေးပါဦးရှင်။",
     "CONVERSATION_RESET": "ဟုတ်ကဲ့ပါရှင်။ အော်ဒါအသစ်စတင်ပါပြီ။ ဘာပစ္စည်းလေး မှာယူချင်ပါသလဲ ရှင့်။ 🙏",
     "NEW_ORDER_INITIATED": "ဟုတ်ကဲ့ပါရှင်။ အော်ဒါအသစ်စတင်ပါပြီ။ ဘာပစ္စည်းလေး မှာယူချင်ပါသလဲ ရှင့်။ 🙏",
-    "ORDER_SUMMARY": "📝 အော်ဒါအကျဉ်းချုပ်\n\n{order_summary_details}\n\n💰 စုစုပေါင်း: {total_price} ကျပ်\n\n👤 အမည်: {customer_name}\n📞 ဖုန်း: {phone_no}\n📍 လိပ်စာ: {address}\n💳 ငွေပေးချေမှု: {payment_method}\n\nအချက်အလက်များ မှန်ကန်ပါက ✅ 'Confirm Order' ကို နှိပ်ပါ သို့မဟုတ် ပြောပေးပါရှင်။\nဖျက်သိမ်းလိုပါက ❌ 'Cancel Order' ဟု ပြောနိုင်ပါတယ်ရှင်။"
+    "ORDER_SUMMARY": "<b>📝 အော်ဒါအကျဉ်းချုပ်</b>\n\n{order_summary_details}\n\n<b>💰 စုစုပေါင်း:</b> {total_price} ကျပ်\n\n<b>👤 အမည်:</b> {customer_name}\n<b>📞 ဖုန်း:</b> {phone_no}\n<b>📍 လိပ်စာ:</b> {address}\n<b>💳 ငွေပေးချေမှု:</b> {payment_method}\n\nအချက်အလက်များ မှန်ကန်ပါက ✅ <b>'Confirm Order'</b> ကို နှိပ်ပါ သို့မဟုတ် ပြောပေးပါရှင်။\nဖျက်သိမ်းလိုပါက ❌ <b>'Cancel Order'</b> ဟု ပြောနိုင်ပါတယ်ရှင်။"
 }
 
 def get_script(status_key: str, **kwargs) -> str:

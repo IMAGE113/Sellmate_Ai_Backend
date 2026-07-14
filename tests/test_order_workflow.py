@@ -81,9 +81,10 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_OrderService = patcher_OrderService.start()
         self.addCleanup(patcher_OrderService.stop)
 
-        patcher_ai = patch('app.workers.order_worker.ai', new=self.mock_ai)
-        self.mock_ai_patch = patcher_ai.start()
-        self.addCleanup(patcher_ai.stop)
+        self.mock_ai_parser = AsyncMock()
+        patcher_ai_parser = patch('app.workers.order_worker.ai_parser', new=self.mock_ai_parser)
+        self.mock_ai_parser_patch = patcher_ai_parser.start()
+        self.addCleanup(patcher_ai_parser.stop)
 
         patcher_send = patch('app.workers.order_worker.send', new=self.mock_send)
         self.mock_send_patch = patcher_send.start()
@@ -172,8 +173,10 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_lock_manager.acquire.return_value = True
         self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "name": "Test Shop", "tg_bot_token": "token", "is_human_takeover_active": False}
         self.order_service.get_or_create_active_order = AsyncMock(return_value={"id": 101, "extracted_data": {}})
-        self.mock_ai.extract_data.return_value = '{"intent": "GREETING"}'
-        self.mock_ai.merge_data.return_value = {"intent": "GREETING"}
+        self.mock_ai_parser.parse_message.return_value = {"intent": "GREETING"}
+        patcher_ai_merge = patch('app.workers.order_worker.ai.merge_data', return_value={"intent": "GREETING"})
+        self.mock_ai_merge = patcher_ai_merge.start()
+        self.addCleanup(patcher_ai_merge.stop)
         self.mock_order_repo.execute.return_value = None
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "stock": 10}
         self.mock_product_repo.update_product_stock.return_value = None
@@ -195,8 +198,8 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_lock_manager.acquire.assert_called_once_with(123)
         self.mock_merchant_repo.get_merchant_by_shop_id.assert_called_once()
         self.order_service.get_or_create_active_order.assert_called_once_with(123, 1)
-        self.mock_ai.extract_data.assert_called_once()
-        self.mock_ai.merge_data.assert_called_once()
+        self.mock_ai_parser.parse_message.assert_called_once()
+        self.mock_ai_merge.assert_called_once()
         self.mock_order_repo.execute.assert_called_once()
         self.order_service.update_status.assert_called_once_with(101, "COLLECTING_INFO", "bot", "Bot asking for: GREETING")
         self.mock_send.assert_called_once()
