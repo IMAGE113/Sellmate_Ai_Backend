@@ -21,7 +21,7 @@ class AIParser:
     async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]]) -> Dict[str, Any]:
         # 1. Deterministic Rule: Confirmation Check
         if self.detect_confirmation(text):
-            return {"intent": "CONFIRM_ORDER", "confidence": 1.0}
+            return {"intent": "CONFIRM_ORDER"}
 
         # 2. AI Extraction Fallback
         try:
@@ -34,14 +34,11 @@ class AIParser:
             )
             data = json.loads(extracted_json)
             
-            # Schema Validation
-            if not isinstance(data, dict):
-                raise ValueError("AI returned non-dictionary response")
-                
-            return data
+            # Use AI class's validation logic
+            return ai.validate_extracted_data(data)
+            
         except Exception as e:
             logging.error(f"AI Parser Error: {e}")
-            # Malformed response recovery: return empty extraction with intent classification attempt
             return {"intent": "UNKNOWN", "items": [], "error": str(e)}
 
 ai_parser = AIParser()

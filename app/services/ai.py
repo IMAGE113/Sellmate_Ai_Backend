@@ -3,8 +3,7 @@ import json
 import httpx
 import re
 import logging
-from typing import Dict, List, Optional
-from app.core.config import GROQ_API_KEY
+from typing import Dict, List, Optional, Any
 
 http_client = httpx.AsyncClient(timeout=20.0)
 
@@ -66,8 +65,9 @@ CURRENT DATA: {json.dumps(current_data, ensure_ascii=False)}
 MENU: {json.dumps(menu, ensure_ascii=False)}
 """
 
-    async def extract_data(self, text: str, shop_name: str, menu: List[Dict], current_data: Dict, merchant_requirements: str = None) -> Dict:
+    async def extract_data(self, text: str, shop_name: str, menu: List[Dict], current_data: Dict, merchant_requirements: str = None) -> str:
         try:
+            from app.core.config import GROQ_API_KEY
             system_prompt = self.get_system_prompt(shop_name, menu, current_data, merchant_requirements)
             res = await http_client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -91,9 +91,65 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
             logging.error(f"AI Extraction Error: {e}")
             return "{}"
 
+    def validate_extracted_data(self, data: Any) -> Dict[str, Any]:
+        """
+        Defensive validation around AI extraction.
+        Ensures invalid AI output never crashes workers.
+        """
+        if not isinstance(data, dict):
+            return {"intent": "UNKNOWN"}
+        
+        validated = {}
+        
+        # Validate Intent
+        valid_intents = [
+            'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 
+            'VIEW_SUMMARY', 'ADD_ITEM', 'REMOVE_ITEM', 'CHANGE_QUANTITY', 
+            'CHANGE_NAME', 'CHANGE_PHONE', 'CHANGE_ADDRESS', 'CHANGE_ITEM_VARIANT', 
+            'CONFIRM_ORDER', 'OTHER', 'UNKNOWN'
+        ]
+        intent = data.get("intent", "UNKNOWN")
+        validated["intent"] = intent if intent in valid_intents else "UNKNOWN"
+        
+        # Validate Items
+        items = data.get("items")
+        if isinstance(items, list):
+            valid_items = []
+            for item in items:
+                if isinstance(item, dict) and item.get("name"):
+                    # Ensure basic item structure
+                    valid_item = {
+                        "name": str(item.get("name")),
+                        "qty": int(item.get("qty", 1)) if str(item.get("qty", "1")).isdigit() else 1,
+                        "size": str(item.get("size")) if item.get("size") else None,
+                        "color": str(item.get("color")) if item.get("color") else None,
+                        "sugar_level": str(item.get("sugar_level")) if item.get("sugar_level") else None,
+                        "ice_level": str(item.get("ice_level")) if item.get("ice_level") else None,
+                        "details": str(item.get("details")) if item.get("details") else ""
+                    }
+                    valid_items.append(valid_item)
+            validated["items"] = valid_items
+
+        # Validate Scalar Fields
+        for field in ["customer_name", "phone_no", "address", "township", "payment_method"]:
+            val = data.get(field)
+            if val and isinstance(val, str) and val.lower() != "unknown":
+                validated[field] = val
+
+        # Pass through modification fields if present
+        for field in ["item_to_remove", "item_to_change_qty", "new_quantity", "item_to_change_variant", 
+                     "new_size", "new_color", "new_sugar_level", "new_ice_level"]:
+            if field in data:
+                validated[field] = data[field]
+                
+        return validated
+
     def merge_data(self, old_data: Dict, new_data: Dict) -> Dict:
+        # First validate the incoming data
+        validated_new_data = self.validate_extracted_data(new_data)
+        
         merged = old_data.copy()
-        for key, value in new_data.items():
+        for key, value in validated_new_data.items():
             if key == "items":
                 # Basic item merging logic
                 current_items = {item["name"]: item for item in merged.get("items", [])}
@@ -104,26 +160,31 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                 merged["items"] = list(current_items.values())
             elif key == "item_to_remove":
                 if value:
-                    merged["items"] = [item for item in merged.get("items", []) if (item.get("name") or "").lower() != (value or "").lower()]
+                    merged["items"] = [item for item in merged.get("items", []) if (item.get("name") or "").lower() != (str(value) or "").lower()]
             elif key == "item_to_change_qty":
-                if value and new_data.get("new_quantity") is not None:
+                if value and validated_new_data.get("new_quantity") is not None:
                     for item in merged.get("items", []):
-                        if (item.get("name") or "").lower() == (value or "").lower():
-                            item["qty"] = new_data["new_quantity"]
+                        if (item.get("name") or "").lower() == (str(value) or "").lower():
+                            try:
+                                item["qty"] = int(validated_new_data["new_quantity"])
+                            except:
+                                pass
                             break
             elif key == "item_to_change_variant":
                 item_name = value
                 if item_name:
                     for item in merged.get("items", []):
-                        if (item.get("name") or "").lower() == item_name.lower():
-                            if new_data.get("new_size") is not None: item["size"] = new_data["new_size"]
-                            if new_data.get("new_color") is not None: item["color"] = new_data["new_color"]
-                            if new_data.get("new_sugar_level") is not None: item["sugar_level"] = new_data["new_sugar_level"]
-                            if new_data.get("new_ice_level") is not None: item["ice_level"] = new_data["new_ice_level"]
+                        if (item.get("name") or "").lower() == str(item_name).lower():
+                            if validated_new_data.get("new_size") is not None: item["size"] = validated_new_data["new_size"]
+                            if validated_new_data.get("new_color") is not None: item["color"] = validated_new_data["new_color"]
+                            if validated_new_data.get("new_sugar_level") is not None: item["sugar_level"] = validated_new_data["new_sugar_level"]
+                            if validated_new_data.get("new_ice_level") is not None: item["ice_level"] = validated_new_data["new_ice_level"]
                             break
-            elif key in ["customer_name", "phone_no", "address", "payment_method"]:
+            elif key in ["customer_name", "phone_no", "address", "township", "payment_method"]:
                 if value and value != "unknown":
                     merged[key] = value
+            elif key == "intent":
+                merged["intent"] = value
             elif value and value != "unknown" and key not in ["item_to_change_qty", "new_quantity", "new_size", "new_color", "new_sugar_level", "new_ice_level", "item_to_change_variant"]:
                 merged[key] = value
         return merged
