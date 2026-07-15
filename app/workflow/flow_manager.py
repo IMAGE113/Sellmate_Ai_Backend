@@ -36,6 +36,12 @@ class FlowManager:
             return "GREETING"
 
         # 5. Summary and Confirmation (Only if all info is present)
+        if intent == "CONFIRM_ORDER":
+            return "ORDER_CONFIRMED"
+        
+        if intent == "CANCEL":
+            return "ORDER_CANCELLED"
+
         if intent in ["VIEW_SUMMARY", "EDIT_ORDER"]:
             return "ORDER_SUMMARY"
 

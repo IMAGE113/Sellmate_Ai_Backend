@@ -180,9 +180,11 @@ async def run_worker():
                 
                 # Re-calculate intent priority if we are in summary stage
                 # We check if the NEXT step would be summary, and if user confirmed, we force CONFIRM_ORDER intent
-                if flow.get_next_step("ORDER") == "ORDER_SUMMARY" and \
-                   ai_parser.detect_confirmation(user_text):
-                    intent = "CONFIRM_ORDER"
+                if flow.get_next_step("ORDER") == "ORDER_SUMMARY":
+                    if ai_parser.detect_confirmation(user_text):
+                        intent = "CONFIRM_ORDER"
+                    elif flow._is_reset_command(user_text):
+                        intent = "CANCEL"
                     
                 status_key = flow.get_next_step(intent)
                 reply_context = {}
