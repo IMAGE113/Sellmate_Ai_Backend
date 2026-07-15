@@ -139,7 +139,7 @@ async def run_worker():
                     # Skip further processing for this cycle as a new order has been initiated
                     await queue_manager.complete(task["id"])
                     continue
-                elif order.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK"] and flow_manager_temp.get_next_step(intent="ORDER", user_text=user_text) == "NEW_ORDER_INITIATED":
+                elif order.get("status") in ["COMPLETED", "CANCELLED", "FAILED", "OUT_OF_STOCK"] and flow_manager_temp.get_next_step(intent="ORDER", user_text=user_text) == "NEW_ORDER_INITIATED":
                     logging.info(f"New order initiated for {shop_id}:{chat_id} after terminal state.")
                     order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
                     order = dict(order_raw) if order_raw else {}
@@ -180,9 +180,11 @@ async def run_worker():
                 
                 # Re-calculate intent priority if we are in summary stage
                 # We check if the NEXT step would be summary, and if user confirmed, we force CONFIRM_ORDER intent
-                if flow.get_next_step("ORDER") == "ORDER_SUMMARY" and \
-                   ai_parser.detect_confirmation(user_text):
-                    intent = "CONFIRM_ORDER"
+                if flow.get_next_step("ORDER") == "ORDER_SUMMARY":
+                    if ai_parser.detect_confirmation(user_text):
+                        intent = "CONFIRM_ORDER"
+                    elif flow._is_reset_command(user_text):
+                        intent = "CANCEL"
                     
                 status_key = flow.get_next_step(intent)
                 reply_context = {}
