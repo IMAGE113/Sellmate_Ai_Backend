@@ -21,19 +21,19 @@ class FlowManager:
         # If any required info is missing, we MUST collect it before showing summary or handling other intents
         missing_field_step = self._get_missing_field_step()
         
-        # 3. If we are in the middle of collecting info, ignore MENU_QUERY or premature SUMMARY requests
-        if missing_field_step:
-            # If the user explicitly asks for menu while we have items but are missing info,
-            # we can show menu, but otherwise we stick to collecting info.
-            # However, per requirements: "Do not switch to MENU_QUERY or STOCK_QUERY until the order flow is complete."
-            return missing_field_step
-
-        # 4. If all required info is collected, handle other intents
-        if intent == "MENU_QUERY":
-            return "MENU_INFO"
-        
+        # 3. Handle GREETING and MENU_QUERY for new/initial interactions
+        # We allow GREETING if the user hasn't started ordering anything yet
         if intent == "GREETING" and not self.order_data.get("items"):
             return "GREETING"
+            
+        if intent == "MENU_QUERY":
+            return "MENU_INFO"
+
+        # 4. If we are in the middle of collecting info, ignore premature SUMMARY requests
+        if missing_field_step:
+            # Per requirements: "Do not switch to MENU_QUERY or STOCK_QUERY until the order flow is complete."
+            # (MENU_QUERY is already handled above for the initial state)
+            return missing_field_step
 
         # 5. Summary and Confirmation (Only if all info is present)
         if intent in ["VIEW_SUMMARY", "EDIT_ORDER"]:
