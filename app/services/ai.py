@@ -104,22 +104,23 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                 merged["items"] = list(current_items.values())
             elif key == "item_to_remove":
                 if value:
-                    merged["items"] = [item for item in merged.get("items", []) if item.get("name", "").lower() != value.lower()]
+                    merged["items"] = [item for item in merged.get("items", []) if (item.get("name") or "").lower() != (value or "").lower()]
             elif key == "item_to_change_qty":
                 if value and new_data.get("new_quantity") is not None:
                     for item in merged.get("items", []):
-                        if item.get("name", "").lower() == value.lower():
+                        if (item.get("name") or "").lower() == (value or "").lower():
                             item["qty"] = new_data["new_quantity"]
                             break
             elif key == "item_to_change_variant":
                 item_name = value
-                for item in merged.get("items", []):
-                    if item.get("name", "").lower() == item_name.lower():
-                        if new_data.get("new_size") is not None: item["size"] = new_data["new_size"]
-                        if new_data.get("new_color") is not None: item["color"] = new_data["new_color"]
-                        if new_data.get("new_sugar_level") is not None: item["sugar_level"] = new_data["new_sugar_level"]
-                        if new_data.get("new_ice_level") is not None: item["ice_level"] = new_data["new_ice_level"]
-                        break
+                if item_name:
+                    for item in merged.get("items", []):
+                        if (item.get("name") or "").lower() == item_name.lower():
+                            if new_data.get("new_size") is not None: item["size"] = new_data["new_size"]
+                            if new_data.get("new_color") is not None: item["color"] = new_data["new_color"]
+                            if new_data.get("new_sugar_level") is not None: item["sugar_level"] = new_data["new_sugar_level"]
+                            if new_data.get("new_ice_level") is not None: item["ice_level"] = new_data["new_ice_level"]
+                            break
             elif key in ["customer_name", "phone_no", "address", "payment_method"]:
                 if value and value != "unknown":
                     merged[key] = value

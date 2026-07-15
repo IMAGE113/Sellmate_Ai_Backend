@@ -86,9 +86,9 @@ class OrderRepository(BaseRepository):
             SET status = $1, 
                 timeline = timeline || jsonb_build_object(
                     'timestamp', CURRENT_TIMESTAMP,
-                    'status', $1,
-                    'actor', $2,
-                    'description', $3
+                    'status', $1::varchar,
+                    'actor', $2::varchar,
+                    'description', $3::text
                 ),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $4 AND shop_id = $5
