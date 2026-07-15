@@ -46,7 +46,7 @@ class FlowManager:
             return "ORDER_SUMMARY"
 
         # 6. Terminal states
-        if self.order_data.get("status") in ["CANCELLED", "FAILED", "OUT_OF_STOCK", "CONVERSATION_RESET"]:
+        if self.order_data.get("status") in ["COMPLETED", "CANCELLED", "FAILED", "OUT_OF_STOCK", "CONVERSATION_RESET"]:
             return "NEW_ORDER_INITIATED"
 
         # 7. Default behavior: Show summary if all info is present, otherwise ask for missing fields
