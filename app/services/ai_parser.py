@@ -34,11 +34,12 @@ class AIParser:
             )
             data = json.loads(extracted_json)
             
-            # Use AI class's validation logic
-            return ai.validate_extracted_data(data)
+            # Production bug fix: Use normalization to guarantee no None values
+            return ai.normalize_extracted_data(data)
             
         except Exception as e:
             logging.error(f"AI Parser Error: {e}")
+            # Fallback to safe structure
             return {"intent": "UNKNOWN", "items": [], "error": str(e)}
 
 ai_parser = AIParser()
