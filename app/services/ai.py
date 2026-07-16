@@ -91,17 +91,18 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
             logging.error(f"AI Extraction Error: {e}")
             return "{}"
 
-    def validate_extracted_data(self, data: Any) -> Dict[str, Any]:
+    def normalize_extracted_data(self, data: Any) -> Dict[str, Any]:
         """
-        Defensive validation around AI extraction.
-        Ensures invalid AI output never crashes workers.
+        Production bug fix: Normalizes all fields to prevent NoneType crashes.
+        Ensures merge_data() never receives None for critical fields.
         """
         if not isinstance(data, dict):
-            return {"intent": "UNKNOWN"}
+            logging.warning(f"AI returned invalid data type: {type(data)}. Normalizing to empty dict.")
+            return {"intent": "UNKNOWN", "items": []}
         
-        validated = {}
+        normalized = {}
         
-        # Validate Intent
+        # 1. Normalize Intent
         valid_intents = [
             'ORDER', 'CANCEL', 'HUMAN_TAKEOVER', 'MENU_QUERY', 'GREETING', 
             'VIEW_SUMMARY', 'ADD_ITEM', 'REMOVE_ITEM', 'CHANGE_QUANTITY', 
@@ -109,84 +110,111 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
             'CONFIRM_ORDER', 'OTHER', 'UNKNOWN'
         ]
         intent = data.get("intent", "UNKNOWN")
-        validated["intent"] = intent if intent in valid_intents else "UNKNOWN"
+        normalized["intent"] = str(intent) if intent and str(intent) in valid_intents else "UNKNOWN"
         
-        # Validate Items
+        # 2. Normalize Items (Critical Fix: Never iterate over None)
         items = data.get("items")
+        normalized_items = []
         if isinstance(items, list):
-            valid_items = []
             for item in items:
-                if isinstance(item, dict) and item.get("name"):
-                    # Ensure basic item structure
-                    valid_item = {
-                        "name": str(item.get("name")),
-                        "qty": int(item.get("qty", 1)) if str(item.get("qty", "1")).isdigit() else 1,
-                        "size": str(item.get("size")) if item.get("size") else None,
-                        "color": str(item.get("color")) if item.get("color") else None,
-                        "sugar_level": str(item.get("sugar_level")) if item.get("sugar_level") else None,
-                        "ice_level": str(item.get("ice_level")) if item.get("ice_level") else None,
-                        "details": str(item.get("details")) if item.get("details") else ""
-                    }
-                    valid_items.append(valid_item)
-            validated["items"] = valid_items
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    if name: # Skip invalid items without names
+                        normalized_item = {
+                            "name": str(name),
+                            "qty": int(item.get("qty", 1)) if str(item.get("qty", "1")).isdigit() else 1,
+                            "size": str(item.get("size")) if item.get("size") else "",
+                            "color": str(item.get("color")) if item.get("color") else "",
+                            "sugar_level": str(item.get("sugar_level")) if item.get("sugar_level") else "",
+                            "ice_level": str(item.get("ice_level")) if item.get("ice_level") else "",
+                            "details": str(item.get("details")) if item.get("details") else ""
+                        }
+                        normalized_items.append(normalized_item)
+        normalized["items"] = normalized_items
 
-        # Validate Scalar Fields
-        for field in ["customer_name", "phone_no", "address", "township", "payment_method"]:
+        # 3. Normalize Scalar Fields (None string -> "")
+        scalar_fields = ["customer_name", "phone_no", "address", "township", "payment_method"]
+        for field in scalar_fields:
             val = data.get(field)
-            if val and isinstance(val, str) and val.lower() != "unknown":
-                validated[field] = val
+            if val and str(val).lower() != "unknown":
+                normalized[field] = str(val)
+            else:
+                normalized[field] = ""
 
-        # Pass through modification fields if present
-        for field in ["item_to_remove", "item_to_change_qty", "new_quantity", "item_to_change_variant", 
-                     "new_size", "new_color", "new_sugar_level", "new_ice_level"]:
-            if field in data:
-                validated[field] = data[field]
+        # 4. Normalize Modification Fields
+        mod_fields = ["item_to_remove", "item_to_change_qty", "item_to_change_variant", 
+                     "new_size", "new_color", "new_sugar_level", "new_ice_level"]
+        for field in mod_fields:
+            val = data.get(field)
+            normalized[field] = str(val) if val else ""
+            
+        # Special case for numeric field
+        new_qty = data.get("new_quantity")
+        if new_qty is not None and str(new_qty).isdigit():
+            normalized["new_quantity"] = int(new_qty)
+        else:
+            normalized["new_quantity"] = 0
                 
-        return validated
+        return normalized
 
     def merge_data(self, old_data: Dict, new_data: Dict) -> Dict:
-        # First validate the incoming data
-        validated_new_data = self.validate_extracted_data(new_data)
+        """
+        Production bug fix: Guaranteed to never receive None values after normalization.
+        """
+        # Ensure old_data is also safe
+        safe_old = old_data if isinstance(old_data, dict) else {}
+        if "items" not in safe_old or not isinstance(safe_old["items"], list):
+            safe_old["items"] = []
+            
+        # Normalize new data
+        normalized_new = self.normalize_extracted_data(new_data)
         
-        merged = old_data.copy()
-        for key, value in validated_new_data.items():
-            if key == "items":
-                # Basic item merging logic
-                current_items = {item["name"]: item for item in merged.get("items", [])}
-                for item in value:
-                    name = item.get("name")
-                    if name:
-                        current_items[name] = item
-                merged["items"] = list(current_items.values())
-            elif key == "item_to_remove":
-                if value:
-                    merged["items"] = [item for item in merged.get("items", []) if (item.get("name") or "").lower() != (str(value) or "").lower()]
-            elif key == "item_to_change_qty":
-                if value and validated_new_data.get("new_quantity") is not None:
-                    for item in merged.get("items", []):
-                        if (item.get("name") or "").lower() == (str(value) or "").lower():
-                            try:
-                                item["qty"] = int(validated_new_data["new_quantity"])
-                            except:
-                                pass
-                            break
-            elif key == "item_to_change_variant":
-                item_name = value
-                if item_name:
-                    for item in merged.get("items", []):
-                        if (item.get("name") or "").lower() == str(item_name).lower():
-                            if validated_new_data.get("new_size") is not None: item["size"] = validated_new_data["new_size"]
-                            if validated_new_data.get("new_color") is not None: item["color"] = validated_new_data["new_color"]
-                            if validated_new_data.get("new_sugar_level") is not None: item["sugar_level"] = validated_new_data["new_sugar_level"]
-                            if validated_new_data.get("new_ice_level") is not None: item["ice_level"] = validated_new_data["new_ice_level"]
-                            break
-            elif key in ["customer_name", "phone_no", "address", "township", "payment_method"]:
-                if value and value != "unknown":
-                    merged[key] = value
-            elif key == "intent":
-                merged["intent"] = value
-            elif value and value != "unknown" and key not in ["item_to_change_qty", "new_quantity", "new_size", "new_color", "new_sugar_level", "new_ice_level", "item_to_change_variant"]:
-                merged[key] = value
+        merged = safe_old.copy()
+        
+        # Merge Items
+        if normalized_new["items"]:
+            current_items = {item["name"]: item for item in merged.get("items", [])}
+            for item in normalized_new["items"]:
+                name = item.get("name")
+                if name:
+                    current_items[name] = item
+            merged["items"] = list(current_items.values())
+            
+        # Item Removal (Critical Fix: Never call .lower() on None)
+        to_remove = normalized_new.get("item_to_remove", "")
+        if to_remove:
+            merged["items"] = [item for item in merged.get("items", []) 
+                             if str(item.get("name", "")).lower() != to_remove.lower()]
+            
+        # Quantity Change
+        to_change_qty = normalized_new.get("item_to_change_qty", "")
+        new_qty = normalized_new.get("new_quantity", 0)
+        if to_change_qty and new_qty > 0:
+            for item in merged.get("items", []):
+                if str(item.get("name", "")).lower() == to_change_qty.lower():
+                    item["qty"] = new_qty
+                    break
+                    
+        # Variant Change
+        to_change_var = normalized_new.get("item_to_change_variant", "")
+        if to_change_var:
+            for item in merged.get("items", []):
+                if str(item.get("name", "")).lower() == to_change_var.lower():
+                    if normalized_new.get("new_size"): item["size"] = normalized_new["new_size"]
+                    if normalized_new.get("new_color"): item["color"] = normalized_new["new_color"]
+                    if normalized_new.get("new_sugar_level"): item["sugar_level"] = normalized_new["new_sugar_level"]
+                    if normalized_new.get("new_ice_level"): item["ice_level"] = normalized_new["new_ice_level"]
+                    break
+                    
+        # Scalar Fields (Critical Fix: Never assign None)
+        for field in ["customer_name", "phone_no", "address", "township", "payment_method"]:
+            val = normalized_new.get(field, "")
+            if val:
+                merged[field] = val
+                
+        # Intent
+        merged["intent"] = normalized_new.get("intent", "UNKNOWN")
+        
         return merged
 
 ai = AI()
