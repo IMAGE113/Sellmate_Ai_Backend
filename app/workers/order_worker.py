@@ -100,7 +100,19 @@ async def run_worker():
                     await queue_manager.complete(task["id"])
                     continue
 
-                order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"])
+                # Production bug fix: Handle greeting before fetching/creating order
+                # Rule 4: If no active order and user says greeting, start Welcome Flow.
+                greetings = ["hi", "hello", "hey", "မင်္ဂလာပါ"]
+                is_greeting = any(g in user_text.lower() for g in greetings)
+                
+                order_raw = await order_repo.get_active_order_by_chat_id(chat_id)
+                if not order_raw and is_greeting:
+                    order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
+                    # Force intent to GREETING for new flow
+                    user_text = "Hello"
+                elif not order_raw:
+                    order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"])
+                
                 order = dict(order_raw) if order_raw else {}
                 order["extracted_data"] = force_dict(order.get("extracted_data", {}))
 
@@ -119,12 +131,12 @@ async def run_worker():
                 # 2. Determine Current State
                 current_state = flow.get_current_state()
                 
-                # 3. Handle Required Fields (Bypass AI Extraction)
+                # 3. Handle Required Fields (Rule 3: Priority Bypass AI Extraction)
                 extracted_data = {}
                 intent = "ORDER"
                 
                 if current_state in ["ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP"]:
-                    # Direct assignment for required fields
+                    # Direct assignment for required fields - ignore all other intents
                     field_map = {
                         "ASK_NAME": "customer_name",
                         "ASK_PHONE": "phone_no",
@@ -148,6 +160,7 @@ async def run_worker():
                     intent = extracted_data.get("intent", "ORDER")
 
                 # 4. Merge Data & Update Order
+                # Production bug fix: Defensive validation is now inside merge_data()
                 new_extracted_data = ai.merge_data(order.get("extracted_data", {}), extracted_data)
                 
                 # Update DB
@@ -165,7 +178,6 @@ async def run_worker():
                 if status_key == "ORDER_CONFIRMED":
                     # Finalization logic (deduct stock, etc.)
                     if not new_extracted_data.get("is_finalized"):
-                        # ... [Stock deduction logic remains the same but cleaned up] ...
                         all_stock_available = True
                         items_to_deduct = []
                         menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
