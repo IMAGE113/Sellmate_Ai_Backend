@@ -22,12 +22,12 @@ async def webhook(shop_id: str, request: Request):
         
         pool = await get_db_pool()
         
-        # 1. Idempotency Check
+        # 1. Idempotency Check (Read-only check at start)
+        idempotency_repo = IdempotencyRepository(pool, shop_id)
+        idempotency_service = IdempotencyService(idempotency_repo)
         if update_id:
-            idempotency_repo = IdempotencyRepository(pool, shop_id)
-            idempotency_service = IdempotencyService(idempotency_repo)
-            if await idempotency_service.check_and_mark(update_id):
-                logging.info(f"Skipping duplicate update_id: {update_id}")
+            if await idempotency_repo.is_processed(update_id):
+                logging.info(f"Skipping already processed update_id: {update_id}")
                 return {"ok": True}
 
         merchant_repo = MerchantRepository(pool, shop_id)
@@ -114,6 +114,9 @@ async def webhook(shop_id: str, request: Request):
                 queue_manager = QueueManager(queue_repo, worker_id=f"webhook-{shop_id}")
                 await queue_manager.push("inbound_messages", payload)
 
+                if update_id:
+                    await idempotency_service.check_and_mark(update_id)
+
                 return {"ok": True}
             except Exception as e:
                 logging.error(f"🔥 Error processing payment screenshot: {str(e)}", exc_info=True)
@@ -138,6 +141,9 @@ async def webhook(shop_id: str, request: Request):
         )
         
         await queue_manager.push("inbound_messages", payload)
+
+        if update_id:
+            await idempotency_service.check_and_mark(update_id)
 
         return {"ok": True}
 

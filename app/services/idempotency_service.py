@@ -10,13 +10,24 @@ class IdempotencyRepository(BaseRepository):
         query = "INSERT INTO processed_webhooks (update_id, shop_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
         await self.execute(query, update_id, self.shop_id)
 
+    async def atomic_check_and_mark(self, update_id: int) -> bool:
+        """
+        Returns True if the update was already processed (conflict occurred).
+        Returns False if the update was new and marked successfully.
+        """
+        query = """
+            INSERT INTO processed_webhooks (update_id, shop_id) 
+            VALUES ($1, $2) 
+            ON CONFLICT (update_id) DO NOTHING 
+            RETURNING update_id
+        """
+        row = await self.fetch_one(query, update_id, self.shop_id)
+        return row is None
+
 class IdempotencyService:
     def __init__(self, idempotency_repo: IdempotencyRepository):
         self.idempotency_repo = idempotency_repo
 
     async def check_and_mark(self, update_id: int) -> bool:
         """Returns True if the update was already processed."""
-        if await self.idempotency_repo.is_processed(update_id):
-            return True
-        await self.idempotency_repo.mark_as_processed(update_id)
-        return False
+        return await self.idempotency_repo.atomic_check_and_mark(update_id)

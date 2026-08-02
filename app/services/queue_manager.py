@@ -24,11 +24,12 @@ class QueueRepository(BaseRepository):
                 SELECT id FROM task_queue 
                 WHERE status IN ('pending', 'retrying') 
                 AND queue_name = $1
+                AND ($3::varchar IS NULL OR shop_id = $3)
                 AND retry_count < 5
                 ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED
             ) RETURNING *
         """
-        return await self.fetch_one(query, queue_name, worker_id)
+        return await self.fetch_one(query, queue_name, worker_id, self.shop_id)
 
     async def mark_completed(self, job_id: int):
         query = """

@@ -14,6 +14,7 @@ from app.services.lock_manager import LockRepository, LockManager
 from app.services.queue_manager import QueueRepository, QueueManager
 from app.services.rate_limiter import rate_limiter
 from app.services.lifecycle_service import LifecycleService, LifecycleRepository
+from app.services.worker_monitor import WorkerMonitor, WorkerMonitorRepository
 
 # ==========================================
 # 🛡️ [SAFE UTILITIES]
@@ -45,17 +46,34 @@ async def run_worker():
     pool = await get_db_pool()
     worker_id = f"worker-{os.getpid()}"
     logging.info(f"🚀 SellMate AI Multi-tenant Workflow Worker {worker_id} started...")
+    
+    monitor = WorkerMonitor(WorkerMonitorRepository(pool, "SYSTEM"))
+    last_recovery = 0
 
     while True:
         try:
-            queue_repo = QueueRepository(pool, "SYSTEM") 
+            # Run recovery periodically (every 60 seconds)
+            current_time = asyncio.get_event_loop().time()
+            if current_time - last_recovery > 60:
+                await monitor.run_recovery()
+                last_recovery = current_time
+
+            # Use None for global worker to fetch tasks for all shops
+            queue_repo = QueueRepository(pool, None) 
             queue_manager = QueueManager(queue_repo, worker_id)
+            
+            # Update heartbeat before popping
+            await monitor.heartbeat(worker_id, 0)
+            
             task = await queue_manager.pop("inbound_messages")
 
             if not task:
                 await asyncio.sleep(1)
                 continue
 
+            # Update heartbeat with active job
+            await monitor.heartbeat(worker_id, 1)
+            
             shop_id = task["shop_id"]
             payload = json.loads(task["payload"])
             chat_id = payload["chat_id"]
