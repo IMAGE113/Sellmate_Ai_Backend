@@ -112,7 +112,11 @@ async def run_worker():
                 if isinstance(workflow_config, str):
                     try: workflow_config = json.loads(workflow_config)
                     except: workflow_config = {}
-                biz.update(workflow_config)
+                
+                # Bug Fix: Protect critical merchant fields from being overwritten by workflow_config
+                protected_fields = ["id", "shop_id", "tg_bot_token", "owner_name", "phone", "password_hash", "status"]
+                safe_config = {k: v for k, v in workflow_config.items() if k not in protected_fields}
+                biz.update(safe_config)
 
                 if biz.get("is_human_takeover_active"):
                     await queue_manager.complete(task["id"])
@@ -139,12 +143,18 @@ async def run_worker():
                 
                 # 1. Handle Reset Command
                 if flow._is_reset_command(user_text):
-                    await order_service.update_status(order["id"], "CANCELLED", "bot", "Order reset by user")
+                    # Bug Fix: Ensure transition to CANCELLED is valid before creating new order
+                    try:
+                        await order_service.update_status(order["id"], "CANCELLED", "bot", "Order reset by user")
+                    except ValueError:
+                        logging.warning(f"Could not transition order {order['id']} to CANCELLED during reset, proceeding anyway.")
+                    
                     order_raw = await order_service.get_or_create_active_order(chat_id, biz["id"], force_new=True)
                     order = dict(order_raw) if order_raw else {}
                     order["extracted_data"] = force_dict(order.get("extracted_data", {}))
                     flow = FlowManager(biz, order["extracted_data"])
                     user_text = "Hello" # Trigger greeting
+                    status_key = "CONVERSATION_RESET" # Set status_key explicitly to avoid crash later
 
                 # 2. Determine Current State
                 current_state = flow.get_current_state()

@@ -63,6 +63,15 @@ async def webhook(shop_id: str, request: Request):
         
         # Handle Photo Uploads (Screenshots)
         if "photo" in msg:
+            from app.services.lock_manager import LockRepository, LockManager
+            lock_repo = LockRepository(pool, shop_id)
+            lock_manager = LockManager(lock_repo)
+            
+            # Bug Fix: Missing conversation locking for photo uploads
+            if not await lock_manager.acquire(chat_id):
+                logging.warning(f"Lock busy for chat_id {chat_id}, skipping photo processing")
+                return {"ok": True} # Telegram will retry
+            
             try:
                 # Get the largest photo
                 file_id = msg["photo"][-1]["file_id"]
@@ -82,10 +91,16 @@ async def webhook(shop_id: str, request: Request):
                 # Update order with screenshot URL and payment_screenshot_received flag
                 order_repo = OrderRepository(pool, shop_id)
                 order_service = OrderService(order_repo, audit_repo)
+                
+                # Bug Fix: get_or_create_active_order should be inside lock
                 order = await order_service.get_or_create_active_order(chat_id, biz["id"])
                 
-                # Update extracted_data with payment_screenshot_received and screenshot_url
+                # Bug Fix: Ensure extracted_data is a dict to avoid corruption
                 extracted_data = order.get("extracted_data", {})
+                if isinstance(extracted_data, str):
+                    try: extracted_data = json.loads(extracted_data)
+                    except: extracted_data = {}
+                
                 extracted_data["payment_screenshot_received"] = True
                 extracted_data["payment_screenshot_url"] = screenshot_url
                 
@@ -121,6 +136,8 @@ async def webhook(shop_id: str, request: Request):
             except Exception as e:
                 logging.error(f"🔥 Error processing payment screenshot: {str(e)}", exc_info=True)
                 raise HTTPException(status_code=500, detail="Error processing payment screenshot")
+            finally:
+                await lock_manager.release(chat_id)
 
         if "text" not in msg:
             return {"ok": True}

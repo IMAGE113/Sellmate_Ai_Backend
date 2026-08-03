@@ -21,27 +21,26 @@ class OrderService:
         self.audit_repo = audit_repo
 
     async def get_or_create_active_order(self, chat_id: int, business_id: int, force_new: bool = False) -> Dict[str, Any]:
-        if force_new:
-            # If force_new is True, explicitly create a new order
+        # Bug Fix: Active order duplication. Always check for existing active order first unless force_new is requested.
+        # Even with force_new, we should ensure existing orders are handled or transitioned.
+        existing_order = await self.order_repo.get_active_order_by_chat_id(chat_id)
+        
+        if force_new and existing_order:
+            # If force_new is True, we cancel the old one first to maintain single active order invariant
+            await self.update_status(existing_order["id"], "CANCELLED", "system", "New order requested, cancelling old active order")
+            existing_order = None
+
+        if not existing_order:
             order = await self.order_repo.create_order(chat_id, business_id)
             await self.audit_repo.log_event(
                 event_type="ORDER_STATUS_CHANGE",
                 actor_source="system",
-                description="New order created from chat (forced)",
+                description="New order created from chat" + (" (forced)" if force_new else ""),
                 order_id=order["id"]
             )
             return order
 
-        order = await self.order_repo.get_active_order_by_chat_id(chat_id)
-        if not order:
-            order = await self.order_repo.create_order(chat_id, business_id)
-            await self.audit_repo.log_event(
-                event_type="ORDER_STATUS_CHANGE",
-                actor_source="system",
-                description="New order created from chat",
-                order_id=order["id"]
-            )
-        return order
+        return existing_order
 
     async def update_status(self, order_id: int, new_status: str, actor: str, description: str):
         order = await self.order_repo.get_order_by_id(order_id)
@@ -49,7 +48,19 @@ class OrderService:
             raise ValueError("Order not found")
         
         current_status = order["status"]
+        
+        # Bug Fix: Invalid order lifecycle transitions. Allow same-status updates for metadata, but block illegal jumps.
+        if current_status == new_status:
+            return
+            
         if new_status not in self.VALID_TRANSITIONS.get(current_status, []):
+            # Log violation attempt
+            await self.audit_repo.log_event(
+                event_type="INVALID_TRANSITION_ATTEMPT",
+                actor_source=actor,
+                description=f"Attempted invalid transition from {current_status} to {new_status}",
+                order_id=order_id
+            )
             raise ValueError(f"Invalid transition from {current_status} to {new_status}")
         
         # Task 2 Fix: If order is cancelled, restore stock if it was previously finalized
