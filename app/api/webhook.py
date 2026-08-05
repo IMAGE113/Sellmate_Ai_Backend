@@ -17,7 +17,16 @@ router = APIRouter()
 @router.post("/webhook/{shop_id}")
 async def webhook(shop_id: str, request: Request):
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except Exception:
+            logging.error("Failed to parse webhook JSON payload")
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        if not isinstance(data, dict):
+            logging.error(f"Webhook payload is not a dictionary: {type(data)}")
+            return {"ok": True}
+
         update_id = data.get("update_id")
         
         pool = await get_db_pool()
@@ -43,16 +52,31 @@ async def webhook(shop_id: str, request: Request):
         # 2. Callback Query Logic
         if "callback_query" in data:
             cb = data["callback_query"]
-            callback_id = cb["id"]
+            callback_id = cb.get("id")
+            if not callback_id:
+                logging.warning("Callback query missing ID")
+                return {"ok": True}
+
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.telegram.org/bot{token}/answerCallbackQuery",
                     json={"callback_query_id": callback_id}
                 )
+            
+            # Defensive field access for callback message
+            cb_msg = cb.get("message", {})
+            cb_chat = cb_msg.get("chat", {})
+            cb_data = cb.get("data")
+            cb_from = cb.get("from")
+            
+            if not cb_chat.get("id") or cb_data is None:
+                logging.warning("Callback query missing essential message or data fields")
+                return {"ok": True}
+
             data["message"] = {
-                "chat": {"id": cb["message"]["chat"]["id"]},
-                "text": cb["data"],
-                "from": cb["from"]
+                "chat": {"id": cb_chat["id"]},
+                "text": cb_data,
+                "from": cb_from
             }
 
         msg = data.get("message")
@@ -63,18 +87,34 @@ async def webhook(shop_id: str, request: Request):
         
         # Handle Photo Uploads (Screenshots)
         if "photo" in msg:
+            # Defensive validation: Ensure photo list is not empty
+            if not isinstance(msg["photo"], list) or len(msg["photo"]) == 0:
+                logging.warning(f"Empty photo array received for chat_id {chat_id}")
+                return {"ok": True}
+
             from app.services.lock_manager import LockRepository, LockManager
             lock_repo = LockRepository(pool, shop_id)
             lock_manager = LockManager(lock_repo)
             
-            # Bug Fix: Missing conversation locking for photo uploads
-            if not await lock_manager.acquire(chat_id):
-                logging.warning(f"Lock busy for chat_id {chat_id}, skipping photo processing")
+            # Lock Retry Strategy: Try up to 3 times with small delay for transient locks
+            lock_acquired = False
+            for _ in range(3):
+                if await lock_manager.acquire(chat_id):
+                    lock_acquired = True
+                    break
+                import asyncio
+                await asyncio.sleep(0.1)
+
+            if not lock_acquired:
+                logging.warning(f"Lock busy for chat_id {chat_id} after retries, skipping photo processing")
                 return {"ok": True} # Telegram will retry
             
             try:
                 # Get the largest photo
-                file_id = msg["photo"][-1]["file_id"]
+                file_id = msg["photo"][-1].get("file_id")
+                if not file_id:
+                    logging.warning("Photo object missing file_id")
+                    return {"ok": True}
                 
                 # Get file path from Telegram
                 file_path = await telegram_service.get_file_path(token, file_id)

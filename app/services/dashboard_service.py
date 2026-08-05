@@ -104,6 +104,13 @@ class DashboardRepository(BaseRepository):
     async def update_merchant_settings(self, settings: Dict[str, Any]):
         bot_token = settings.get("bot_token")
         
+        # Defensive Validation: Ensure Telegram token format is valid
+        if bot_token:
+            import re
+            if not re.match(r"^[0-9]+:[a-zA-Z0-9_-]{35}$", bot_token):
+                logging.warning(f"Invalid Telegram token format attempted for shop_id: {self.shop_id}")
+                bot_token = None # Do not save invalid token
+        
         # ၁။ အရင်ဆုံး ဒေတာဘေ့စ်ရဲ့ tg_bot_token ထဲ ကွက်တိ သွားသိမ်းမယ်
         # Task 1 Fix: Also update other merchant settings if provided
         update_fields = ["tg_bot_token = $1"]

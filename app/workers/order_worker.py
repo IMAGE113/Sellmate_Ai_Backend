@@ -100,8 +100,18 @@ async def run_worker():
 
             lock_repo = LockRepository(pool, shop_id)
             lock_manager = LockManager(lock_repo)
-            if not await lock_manager.acquire(chat_id):
-                await queue_manager.fail(task["id"], "Lock acquisition failed", can_retry=True)
+            
+            # Lock Retry Strategy: Try up to 3 times with small delay for transient locks
+            lock_acquired = False
+            for _ in range(3):
+                if await lock_manager.acquire(chat_id):
+                    lock_acquired = True
+                    break
+                import asyncio
+                await asyncio.sleep(0.1)
+
+            if not lock_acquired:
+                await queue_manager.fail(task["id"], "Lock acquisition failed after retries", can_retry=True)
                 continue
 
             try:

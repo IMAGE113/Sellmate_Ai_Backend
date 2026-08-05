@@ -55,6 +55,13 @@ class ScriptService:
 
     async def rotate_bot_token(self, new_token: str):
         """Harden bot token replacement without service interruption."""
+        # Defensive Validation: Ensure Telegram token format is valid
+        import re
+        if not re.match(r"^[0-9]+:[a-zA-Z0-9_-]{35}$", new_token):
+            import logging
+            logging.warning(f"Invalid Telegram token rotation attempt for shop_id: {self.script_repo.shop_id}")
+            return False
+
         # This would be used by an admin service to update the token in the DB
         # The Orchestrator should reload the token from the DB/Cache on the next request
         query = "UPDATE businesses SET tg_bot_token = $1, updated_at = NOW() WHERE shop_id = $2"

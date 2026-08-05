@@ -22,7 +22,13 @@ class QueueRepository(BaseRepository):
                 heartbeat=NOW()
             WHERE id = (
                 SELECT id FROM task_queue 
-                WHERE status IN ('pending', 'retrying') 
+                WHERE (
+                    status = 'pending' 
+                    OR (
+                        status = 'retrying' 
+                        AND started_at < NOW() - (POWER(2, retry_count) * INTERVAL '30 seconds')
+                    )
+                )
                 AND queue_name = $1
                 AND ($3::varchar IS NULL OR shop_id = $3)
                 AND retry_count < 5
