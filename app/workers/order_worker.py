@@ -86,6 +86,15 @@ async def run_worker():
                 rate_limiter.validate_ai_usage(shop_id)
             except Exception as e:
                 logging.warning(f"Validation failed for {shop_id}: {e}")
+                # Bug Fix: Improve Rate Limit UX by notifying the user instead of silent drop
+                from app.services.rate_limiter import RateLimitExceeded
+                if isinstance(e, RateLimitExceeded):
+                    biz_raw = await MerchantRepository(pool, shop_id).get_merchant_by_shop_id()
+                    if biz_raw and biz_raw.get("tg_bot_token"):
+                        from app.core.scripts import get_script
+                        reply_text = get_script("RATE_LIMIT_EXCEEDED")
+                        await send(biz_raw["tg_bot_token"], chat_id, reply_text)
+                
                 await queue_manager.fail(task["id"], str(e), can_retry=False)
                 continue
 
@@ -119,13 +128,15 @@ async def run_worker():
                 biz.update(safe_config)
 
                 if biz.get("is_human_takeover_active"):
+                    # Bug Fix: Handle human takeover flow by notifying user instead of silent discard
+                    reply_text = flow.get_response("HUMAN_TAKEOVER", biz["name"])
+                    await send(biz["tg_bot_token"], chat_id, reply_text)
                     await queue_manager.complete(task["id"])
                     continue
 
                 # Production bug fix: Handle greeting before fetching/creating order
                 # Rule 4: If no active order and user says greeting, start Welcome Flow.
-                greetings = ["hi", "hello", "hey", "မင်္ဂလာပါ"]
-                is_greeting = any(g in user_text.lower() for g in greetings)
+                is_greeting = ai_parser.detect_greeting(user_text)
                 
                 order_raw = await order_repo.get_active_order_by_chat_id(chat_id)
                 if not order_raw and is_greeting:
@@ -164,16 +175,30 @@ async def run_worker():
                 intent = "ORDER"
                 
                 if current_state in ["ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP"]:
-                    # Direct assignment for required fields - ignore all other intents
-                    field_map = {
-                        "ASK_NAME": "customer_name",
-                        "ASK_PHONE": "phone_no",
-                        "ASK_ADDRESS": "address",
-                        "ASK_TOWNSHIP": "township"
+                    # Bug Fix: Check for exit intents (CANCEL, HUMAN) before trapping in field collection
+                    # This ensures users have a recovery path.
+                    menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
+                    menu = make_json_safe([dict(m) for m in menu_rows])
+                    
+                    ai_context = {
+                        "shop_name": biz["name"],
+                        "previous_data": order.get("extracted_data", {}),
+                        "requirements_text": biz.get("requirements_text")
                     }
-                    field_name = field_map[current_state]
-                    extracted_data = {field_name: user_text, "intent": "ORDER"}
-                    intent = "ORDER"
+                    extracted_data = await ai_parser.parse_message(user_text, ai_context, menu)
+                    intent = extracted_data.get("intent", "ORDER")
+                    
+                    if intent not in ["CANCEL", "HUMAN_TAKEOVER", "GREETING"]:
+                        # If not an exit intent, treat as field input
+                        field_map = {
+                            "ASK_NAME": "customer_name",
+                            "ASK_PHONE": "phone_no",
+                            "ASK_ADDRESS": "address",
+                            "ASK_TOWNSHIP": "township"
+                        }
+                        field_name = field_map[current_state]
+                        extracted_data = {field_name: user_text, "intent": "ORDER"}
+                        intent = "ORDER"
                 else:
                     # Normal AI Extraction
                     menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)

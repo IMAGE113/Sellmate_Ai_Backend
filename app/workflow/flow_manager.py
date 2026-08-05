@@ -97,4 +97,7 @@ class FlowManager:
 
     def _is_reset_command(self, user_text: str) -> bool:
         reset_keywords = ["restart", "new order", "start over", "cancel order", "/start"]
-        return any(keyword in user_text.lower() for keyword in reset_keywords)
+        text = user_text.lower().strip()
+        # Bug Fix: Use strict matching or startswith for commands to avoid substring traps
+        # e.g., "cancel order if out of stock" shouldn't trigger a full reset.
+        return any(text == k or text.startswith(k + " ") for k in reset_keywords)

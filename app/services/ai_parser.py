@@ -15,11 +15,23 @@ class AIParser:
         return any(w in text.lower() for w in confirm_words)
 
     @staticmethod
+    def detect_greeting(text: str) -> bool:
+        greetings = ["hi", "hello", "hey", "မင်္ဂလာပါ", "ဟိုင်း", "morning", "evening"]
+        # Use word boundaries or strict matching to avoid false positives
+        words = text.lower().strip().split()
+        if not words: return False
+        return any(w in greetings for w in words[:2])
+
+    @staticmethod
     def detect_screenshot(msg: Dict[str, Any]) -> bool:
         return "photo" in msg
 
     async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # 1. Deterministic Rule: Confirmation Check
+        # 1. Deterministic Rule: Greeting Check
+        if self.detect_greeting(text):
+            return {"intent": "GREETING"}
+
+        # 2. Deterministic Rule: Confirmation Check
         if self.detect_confirmation(text):
             return {"intent": "CONFIRM_ORDER"}
 
