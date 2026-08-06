@@ -107,7 +107,6 @@ async def run_worker():
                 if await lock_manager.acquire(chat_id):
                     lock_acquired = True
                     break
-                import asyncio
                 await asyncio.sleep(0.1)
 
             if not lock_acquired:
