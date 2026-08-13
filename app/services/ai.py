@@ -133,13 +133,31 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
         normalized["items"] = normalized_items
 
         # 3. Normalize Scalar Fields (None string -> "")
+        # BUG-01, BUG-04, BUG-06, BUG-10: Use ValidationService for consistency
+        from app.services.validation_service import ValidationService
+        
         scalar_fields = ["customer_name", "phone_no", "address", "township", "payment_method"]
         for field in scalar_fields:
             val = data.get(field)
-            if val and str(val).lower() != "unknown":
-                normalized[field] = str(val)
-            else:
+            if not val or str(val).lower() == "unknown":
                 normalized[field] = ""
+                continue
+                
+            val_str = str(val)
+            if field == "customer_name":
+                valid, norm_val = ValidationService.validate_name(val_str)
+                normalized[field] = norm_val if valid else ""
+            elif field == "phone_no":
+                valid, norm_val = ValidationService.validate_phone(val_str)
+                normalized[field] = norm_val if valid else ""
+            elif field == "address":
+                valid, norm_val = ValidationService.validate_address(val_str)
+                normalized[field] = norm_val if valid else ""
+            elif field == "township":
+                valid, norm_val = ValidationService.validate_township(val_str)
+                normalized[field] = norm_val if valid else ""
+            else:
+                normalized[field] = val_str
 
         # 4. Normalize Modification Fields
         mod_fields = ["item_to_remove", "item_to_change_qty", "item_to_change_variant", 

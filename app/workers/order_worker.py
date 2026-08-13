@@ -78,6 +78,10 @@ async def run_worker():
             payload = json.loads(task["payload"])
             chat_id = payload["chat_id"]
             user_text = payload["data"].get("user_text", "")
+            
+            # BUG-11: Unicode normalization for all incoming text
+            from app.services.validation_service import ValidationService
+            user_text = ValidationService.normalize_unicode(user_text)
                 
             lifecycle_service = LifecycleService(LifecycleRepository(pool, shop_id))
             try:
@@ -206,7 +210,33 @@ async def run_worker():
                             "ASK_TOWNSHIP": "township"
                         }
                         field_name = field_map[current_state]
-                        extracted_data = {field_name: user_text, "intent": "ORDER"}
+                        
+                        # BUG-01, BUG-04, BUG-06, BUG-10: Apply validation
+                        from app.services.validation_service import ValidationService
+                        valid = False
+                        normalized_val = user_text
+                        
+                        if field_name == "customer_name":
+                            valid, normalized_val = ValidationService.validate_name(user_text)
+                        elif field_name == "phone_no":
+                            valid, normalized_val = ValidationService.validate_phone(user_text)
+                        elif field_name == "address":
+                            valid, normalized_val = ValidationService.validate_address(user_text)
+                        elif field_name == "township":
+                            # BUG-10: Validate against supported townships if configured
+                            supported = biz.get("supported_townships")
+                            if isinstance(supported, str):
+                                try: supported = json.loads(supported)
+                                except: supported = None
+                            valid, normalized_val = ValidationService.validate_township(user_text, supported)
+                        
+                        if valid:
+                            extracted_data = {field_name: normalized_val, "intent": "ORDER"}
+                        else:
+                            # If invalid, we don't update the field, effectively re-asking
+                            # We can also set a flag to show an error message if needed
+                            extracted_data = {"intent": "ORDER"}
+                        
                         intent = "ORDER"
                 else:
                     # Normal AI Extraction
@@ -290,14 +320,16 @@ async def run_worker():
                         total += price * qty
                         summary.append(f"{p_name} x {qty} ({price * qty:.2f})")
                     
+                    # BUG-08: HTML Escape user fields
+                    from app.services.validation_service import ValidationService
                     reply_text = flow.get_response(
                         status_key, biz["name"],
-                        order_summary_details="\n".join(summary),
+                        order_summary_details="\n".join(summary), # items are from menu, but details might need escaping if user-provided
                         total_price=f"{total:.2f}",
-                        customer_name=new_extracted_data.get("customer_name", "N/A"),
-                        phone_no=new_extracted_data.get("phone_no", "N/A"),
-                        address=new_extracted_data.get("address", "N/A"),
-                        payment_method=new_extracted_data.get("payment_method", "N/A")
+                        customer_name=ValidationService.escape_html(new_extracted_data.get("customer_name", "N/A")),
+                        phone_no=ValidationService.escape_html(new_extracted_data.get("phone_no", "N/A")),
+                        address=ValidationService.escape_html(new_extracted_data.get("address", "N/A")),
+                        payment_method=ValidationService.escape_html(new_extracted_data.get("payment_method", "N/A"))
                     )
                 else:
                     reply_text = flow.get_response(status_key, biz["name"], **reply_context)

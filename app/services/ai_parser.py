@@ -11,8 +11,14 @@ class AIParser:
     
     @staticmethod
     def detect_confirmation(text: str) -> bool:
+        """
+        BUG-18: Strict confirmation detection to avoid substring traps like 'book' or 'cookbook'.
+        """
         confirm_words = ["confirm", "ok", "ဟုတ်", "မှန်တယ်", "မှာမယ်", "အိုကေ", "yes", "အတည်ပြု"]
-        return any(w in text.lower() for w in confirm_words)
+        # Use word boundaries and strict matching
+        words = text.lower().strip().split()
+        if not words: return False
+        return any(w in words for w in confirm_words)
 
     @staticmethod
     def detect_greeting(text: str) -> bool:
