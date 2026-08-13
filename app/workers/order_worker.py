@@ -201,7 +201,8 @@ async def run_worker():
                     extracted_data = await ai_parser.parse_message(user_text, ai_context, menu)
                     intent = extracted_data.get("intent", "ORDER")
                     
-                    if intent not in ["CANCEL", "HUMAN_TAKEOVER", "GREETING"]:
+                    # BUG-21: Expand exemption list to include MENU_QUERY and VIEW_SUMMARY
+                    if intent not in ["CANCEL", "HUMAN_TAKEOVER", "GREETING", "MENU_QUERY", "VIEW_SUMMARY"]:
                         # If not an exit intent, treat as field input
                         field_map = {
                             "ASK_NAME": "customer_name",
@@ -279,7 +280,24 @@ async def run_worker():
                             p_name = item.get("name")
                             qty = item.get("qty", 0)
                             if p_name and qty > 0:
-                                p = await product_repo.get_product_by_name(p_name)
+                                # BUG-16, BUG-17: Variant-aware and case-insensitive stock check
+                                attributes = {
+                                    "size": item.get("size"),
+                                    "color": item.get("color"),
+                                    "sugar_level": item.get("sugar_level"),
+                                    "ice_level": item.get("ice_level")
+                                }
+                                # Remove empty attributes
+                                attributes = {k: v for k, v in attributes.items() if v}
+                                
+                                p = None
+                                if attributes:
+                                    p = await product_repo.get_product_variant(p_name, attributes)
+                                
+                                if not p:
+                                    # Fallback to parent product with case-insensitive check
+                                    p = await product_repo.get_product_by_name(p_name)
+                                
                                 if not p or p["stock"] < qty:
                                     all_stock_available = False
                                     status_key = "OUT_OF_STOCK"

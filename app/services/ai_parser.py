@@ -14,11 +14,17 @@ class AIParser:
         """
         BUG-18: Strict confirmation detection to avoid substring traps like 'book' or 'cookbook'.
         """
-        confirm_words = ["confirm", "ok", "ဟုတ်", "မှန်တယ်", "မှာမယ်", "အိုကေ", "yes", "အတည်ပြု"]
+        import re
+        confirm_words = ["confirm", "ok", "ဟုတ်", "မှန်တယ်", "မှာမယ်", "အိုကေ", "yes", "အတည်ပြု", "ဟုတ်ကဲ့"]
         # Use word boundaries and strict matching
-        words = text.lower().strip().split()
-        if not words: return False
-        return any(w in words for w in confirm_words)
+        text = text.lower().strip()
+        # Check if any confirm word is in the text as a full word
+        for w in confirm_words:
+            pattern = rf"\b{re.escape(w)}\b"
+            # For Burmese, word boundaries might not work well, so we check if it's the whole string or surrounded by whitespace
+            if re.search(pattern, text) or w == text:
+                return True
+        return False
 
     @staticmethod
     def detect_greeting(text: str) -> bool:

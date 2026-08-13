@@ -110,17 +110,24 @@ class MerchantRepository(BaseRepository):
 
 class ProductRepository(BaseRepository):
     async def get_product_by_name(self, product_name: str) -> Optional[Dict[str, Any]]:
-        query = "SELECT * FROM products WHERE name = $1 AND shop_id = $2 AND variant_of_id IS NULL"
+        """
+        BUG-17: Case-insensitive, whitespace-trimmed lookup for product name.
+        """
+        query = "SELECT * FROM products WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND shop_id = $2 AND variant_of_id IS NULL"
         return await self.fetch_one(query, product_name, self.shop_id)
 
-    async def get_product_variant(self, parent_id: int, attributes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def get_product_variant(self, product_name: str, attributes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Find a specific variant of a product based on attributes.
-        attributes is a dict like {'size': 'L', 'color': 'Red'}
+        BUG-16, BUG-17: Find a specific variant by parent name (case-insensitive) and attributes.
         """
-        # Task 3 Fix: Explicitly cast to jsonb to avoid "could not determine data type of parameter $3"
-        query = "SELECT * FROM products WHERE variant_of_id = $1 AND shop_id = $2 AND attributes @> $3::jsonb"
-        return await self.fetch_one(query, parent_id, self.shop_id, json.dumps(attributes))
+        query = """
+            SELECT v.* FROM products v
+            JOIN products p ON v.variant_of_id = p.id
+            WHERE LOWER(TRIM(p.name)) = LOWER(TRIM($1)) 
+            AND v.shop_id = $2 
+            AND v.attributes @> $3::jsonb
+        """
+        return await self.fetch_one(query, product_name, self.shop_id, json.dumps(attributes))
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"

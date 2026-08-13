@@ -113,6 +113,7 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
         normalized["intent"] = str(intent) if intent and str(intent) in valid_intents else "UNKNOWN"
         
         # 2. Normalize Items (Critical Fix: Never iterate over None)
+        # BUG-12, BUG-13, BUG-14: Robust quantity handling
         items = data.get("items")
         normalized_items = []
         if isinstance(items, list):
@@ -120,9 +121,17 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                 if isinstance(item, dict):
                     name = item.get("name")
                     if name: # Skip invalid items without names
+                        qty_raw = item.get("qty", 1)
+                        try:
+                            qty = float(qty_raw)
+                            # BUG-12, BUG-14: Reject non-positive quantities
+                            if qty <= 0: continue
+                        except (ValueError, TypeError):
+                            qty = 1.0
+                            
                         normalized_item = {
                             "name": str(name),
-                            "qty": int(item.get("qty", 1)) if str(item.get("qty", "1")).isdigit() else 1,
+                            "qty": qty,
                             "size": str(item.get("size")) if item.get("size") else "",
                             "color": str(item.get("color")) if item.get("color") else "",
                             "sugar_level": str(item.get("sugar_level")) if item.get("sugar_level") else "",
@@ -190,34 +199,53 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
         merged = safe_old.copy()
         
         # Merge Items
+        # BUG-15: Use composite key (name + variants) for deduplication
+        def get_item_key(item: Dict) -> str:
+            return "|".join([
+                str(item.get("name", "")).lower().strip(),
+                str(item.get("size", "")).lower().strip(),
+                str(item.get("color", "")).lower().strip(),
+                str(item.get("sugar_level", "")).lower().strip(),
+                str(item.get("ice_level", "")).lower().strip()
+            ])
+
         if normalized_new["items"]:
-            current_items = {item["name"]: item for item in merged.get("items", [])}
+            current_items = {get_item_key(item): item for item in merged.get("items", [])}
             for item in normalized_new["items"]:
-                name = item.get("name")
-                if name:
-                    current_items[name] = item
+                current_items[get_item_key(item)] = item
             merged["items"] = list(current_items.values())
             
         # Item Removal (Critical Fix: Never call .lower() on None)
         to_remove = normalized_new.get("item_to_remove", "")
         if to_remove:
+            # BUG-15: Match removal against composite key if possible, or just name
             merged["items"] = [item for item in merged.get("items", []) 
-                             if str(item.get("name", "")).lower() != to_remove.lower()]
+                             if str(item.get("name", "")).lower().strip() != to_remove.lower().strip()]
             
         # Quantity Change
         to_change_qty = normalized_new.get("item_to_change_qty", "")
-        new_qty = normalized_new.get("new_quantity", 0)
-        if to_change_qty and new_qty > 0:
-            for item in merged.get("items", []):
-                if str(item.get("name", "")).lower() == to_change_qty.lower():
-                    item["qty"] = new_qty
-                    break
+        new_qty_raw = normalized_new.get("new_quantity", 0)
+        try:
+            new_qty = float(new_qty_raw)
+        except (ValueError, TypeError):
+            new_qty = 0.0
+
+        if to_change_qty:
+            # BUG-18: Handle set qty to 0 as removal
+            if new_qty <= 0:
+                merged["items"] = [item for item in merged.get("items", []) 
+                                 if str(item.get("name", "")).lower().strip() != to_change_qty.lower().strip()]
+            else:
+                for item in merged.get("items", []):
+                    if str(item.get("name", "")).lower().strip() == to_change_qty.lower().strip():
+                        item["qty"] = new_qty
+                        break
                     
         # Variant Change
         to_change_var = normalized_new.get("item_to_change_variant", "")
         if to_change_var:
             for item in merged.get("items", []):
-                if str(item.get("name", "")).lower() == to_change_var.lower():
+                if str(item.get("name", "")).lower().strip() == to_change_var.lower().strip():
                     if normalized_new.get("new_size"): item["size"] = normalized_new["new_size"]
                     if normalized_new.get("new_color"): item["color"] = normalized_new["new_color"]
                     if normalized_new.get("new_sugar_level"): item["sugar_level"] = normalized_new["new_sugar_level"]

@@ -55,12 +55,23 @@ class FlowManager:
         """
         current_state = self.get_current_state()
 
+        # BUG-19: Move CANCEL to top priority
+        if intent == "CANCEL":
+            return "ORDER_CANCELLED"
+
         # 1. Global Commands (Reset/Human) take absolute priority
         if user_text and self._is_reset_command(user_text):
             return "CONVERSATION_RESET"
 
         if intent == "HUMAN_TAKEOVER":
             return "HUMAN_TAKEOVER"
+
+        # BUG-21: Handle MENU_QUERY and VIEW_SUMMARY regardless of state
+        if intent == "MENU_QUERY":
+            return "MENU_INFO"
+        
+        if intent == "VIEW_SUMMARY" and self.order_data.get("items"):
+            return "ORDER_SUMMARY"
 
         # 2. While waiting for a required field, ignore general AI intents
         # except for explicit cancellations/resets.
@@ -69,19 +80,13 @@ class FlowManager:
             # The worker will handle the data assignment
             return current_state
 
-        # 3. Handle GREETING and MENU_QUERY for initial interactions
+        # 3. Handle GREETING for initial interactions
         if intent == "GREETING" and current_state == "WELCOME":
             return "GREETING"
-            
-        if intent == "MENU_QUERY":
-            return "MENU_INFO"
 
         # 4. Handle Terminal States Transitions
         if intent == "CONFIRM_ORDER" and current_state == "ORDER_SUMMARY":
             return "ORDER_CONFIRMED"
-        
-        if intent == "CANCEL":
-            return "ORDER_CANCELLED"
 
         # 5. Default to the current state determined by the data
         return current_state
@@ -96,8 +101,16 @@ class FlowManager:
         return get_script(status_key, shop_name=shop_name, **kwargs)
 
     def _is_reset_command(self, user_text: str) -> bool:
-        reset_keywords = ["restart", "new order", "start over", "cancel order", "/start"]
+        """
+        BUG-20, BUG-22: Broaden reset command detection and add Burmese equivalents.
+        """
+        # English keywords
+        en_keywords = ["restart", "new order", "start over", "cancel order", "/start", "cancel"]
+        # Burmese keywords (BUG-22)
+        my_keywords = ["အစကပြန်စ", "အော်ဒါဖျက်", "ပြန်စမယ်", "မမှာတော့ဘူး"]
+        
+        reset_keywords = en_keywords + my_keywords
         text = user_text.lower().strip()
-        # Bug Fix: Use strict matching or startswith for commands to avoid substring traps
-        # e.g., "cancel order if out of stock" shouldn't trigger a full reset.
+        
+        # Use strict matching or startswith for commands to avoid substring traps
         return any(text == k or text.startswith(k + " ") for k in reset_keywords)
