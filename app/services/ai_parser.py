@@ -28,23 +28,39 @@ class AIParser:
 
     @staticmethod
     def detect_greeting(text: str) -> bool:
+        """
+        BUG-24: Greeting detection with punctuation stripping.
+        """
+        import re
         greetings = ["hi", "hello", "hey", "မင်္ဂလာပါ", "ဟိုင်း", "morning", "evening"]
-        # Use word boundaries or strict matching to avoid false positives
-        words = text.lower().strip().split()
-        if not words: return False
-        return any(w in greetings for w in words[:2])
+        # Strip punctuation
+        clean_text = re.sub(r'[^\w\s\u1000-\u109F]', '', text.lower()).strip()
+        if not clean_text: return False
+        
+        # Check for English words (split by whitespace)
+        words = clean_text.split()
+        for w in words[:2]:
+            if w in greetings: return True
+            
+        # Check for Burmese greetings (might be part of a larger word due to lack of spaces)
+        for g in greetings:
+            if g in clean_text[:10]: # Check start of string
+                return True
+                
+        return False
 
     @staticmethod
     def detect_screenshot(msg: Dict[str, Any]) -> bool:
         return "photo" in msg
 
-    async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]], current_state: Optional[str] = None) -> Dict[str, Any]:
         # 1. Deterministic Rule: Greeting Check
         if self.detect_greeting(text):
             return {"intent": "GREETING"}
 
         # 2. Deterministic Rule: Confirmation Check
-        if self.detect_confirmation(text):
+        # BUG-25: Only fire confirmation fast-path when in ORDER_SUMMARY to avoid false positives
+        if current_state == "ORDER_SUMMARY" and self.detect_confirmation(text):
             return {"intent": "CONFIRM_ORDER"}
 
         # 2. AI Extraction Fallback

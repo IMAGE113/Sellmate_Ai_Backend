@@ -198,7 +198,7 @@ async def run_worker():
                         "previous_data": order.get("extracted_data", {}),
                         "requirements_text": biz.get("requirements_text")
                     }
-                    extracted_data = await ai_parser.parse_message(user_text, ai_context, menu)
+                    extracted_data = await ai_parser.parse_message(user_text, ai_context, menu, current_state)
                     intent = extracted_data.get("intent", "ORDER")
                     
                     # BUG-21: Expand exemption list to include MENU_QUERY and VIEW_SUMMARY
@@ -232,10 +232,20 @@ async def run_worker():
                             valid, normalized_val = ValidationService.validate_township(user_text, supported)
                         
                         if valid:
-                            extracted_data = {field_name: normalized_val, "intent": "ORDER"}
+                            # BUG-23: Duplicate detection. Reject if identical to previously collected field.
+                            is_duplicate = False
+                            for prev_field in ["customer_name", "phone_no", "address", "township"]:
+                                if prev_field != field_name and order["extracted_data"].get(prev_field) == normalized_val:
+                                    is_duplicate = True
+                                    break
+                            
+                            if not is_duplicate:
+                                extracted_data = {field_name: normalized_val, "intent": "ORDER"}
+                            else:
+                                logging.warning(f"Duplicate field detection: {field_name} matches {normalized_val}")
+                                extracted_data = {"intent": "ORDER"}
                         else:
                             # If invalid, we don't update the field, effectively re-asking
-                            # We can also set a flag to show an error message if needed
                             extracted_data = {"intent": "ORDER"}
                         
                         intent = "ORDER"
@@ -249,13 +259,35 @@ async def run_worker():
                         "previous_data": order.get("extracted_data", {}),
                         "requirements_text": biz.get("requirements_text")
                     }
-                    extracted_data = await ai_parser.parse_message(user_text, ai_context, menu)
+                    extracted_data = await ai_parser.parse_message(user_text, ai_context, menu, current_state)
+                    
+                    # BUG-31: Validate AI-extracted fields even in normal extraction path
+                    from app.services.validation_service import ValidationService
+                    for field in ["customer_name", "phone_no", "address", "township"]:
+                        if extracted_data.get(field):
+                            valid = False
+                            if field == "customer_name": valid, _ = ValidationService.validate_name(extracted_data[field])
+                            elif field == "phone_no": valid, _ = ValidationService.validate_phone(extracted_data[field])
+                            elif field == "address": valid, _ = ValidationService.validate_address(extracted_data[field])
+                            elif field == "township": valid, _ = ValidationService.validate_township(extracted_data[field])
+                            
+                            if not valid:
+                                del extracted_data[field]
+
                     intent = extracted_data.get("intent", "ORDER")
 
                 # 4. Merge Data & Update Order
-                # Production bug fix: Defensive validation is now inside merge_data()
                 new_extracted_data = ai.merge_data(order.get("extracted_data", {}), extracted_data)
                 
+                # BUG-27: Retry/Attempt Counter for loop detection
+                new_state = FlowManager(biz, new_extracted_data).get_current_state()
+                if new_state == current_state and intent not in ["GREETING", "MENU_QUERY", "VIEW_SUMMARY", "HUMAN_TAKEOVER", "CANCEL"]:
+                    new_extracted_data["retry_count"] = new_extracted_data.get("retry_count", 0) + 1
+                    if new_extracted_data["retry_count"] >= 3:
+                        intent = "HUMAN_TAKEOVER"
+                else:
+                    new_extracted_data["retry_count"] = 0
+
                 # Update DB
                 await order_repo.execute(
                     "UPDATE orders SET extracted_data = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
@@ -314,10 +346,12 @@ async def run_worker():
                             new_extracted_data["is_finalized"] = True
                             new_extracted_data["order_number"] = order_num
                             
+                            # BUG-29: Use order_service.update_status for completion
                             await order_repo.execute(
-                                "UPDATE orders SET extracted_data = $1, status = 'COMPLETED', order_number = $2 WHERE id = $3",
+                                "UPDATE orders SET extracted_data = $1, order_number = $2 WHERE id = $3",
                                 json.dumps(new_extracted_data), order_num, order["id"]
                             )
+                            await order_service.update_status(order["id"], "COMPLETED", "bot", f"Order confirmed: {order_num}")
                             reply_context["order_id"] = order_num
                         else:
                             await order_service.update_status(order["id"], status_key, "bot", f"Failed: {status_key}")

@@ -12,7 +12,7 @@ class OrderService:
         'READY_TO_SHIP': ['COMPLETED', 'CANCELLED'],
         'OUT_OF_STOCK': ['COLLECTING_INFO', 'CANCELLED'],
         'INVALID_VARIANT': ['COLLECTING_INFO', 'CANCELLED'],
-        'COMPLETED': [],
+        'COMPLETED': ['CANCELLED'], # BUG-30: Allow cancellation within grace period
         'CANCELLED': ['NEW_CHAT', 'COLLECTING_INFO'] # Allow restart
     }
 

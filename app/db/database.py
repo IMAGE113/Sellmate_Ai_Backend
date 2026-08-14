@@ -64,11 +64,18 @@ class OrderRepository(BaseRepository):
         return await self.fetch_one(query, order_id, self.shop_id)
 
     async def get_active_order_by_chat_id(self, chat_id: int) -> Optional[Dict[str, Any]]:
+        """
+        BUG-30: Allow finding recently completed orders (5-minute grace period) 
+        to handle post-order edits/cancellations.
+        """
         query = """
             SELECT * FROM orders 
             WHERE chat_id = $1 AND shop_id = $2 
-            AND status NOT IN ('COMPLETED', 'CANCELLED')
-            ORDER BY created_at DESC LIMIT 1
+            AND (
+                status NOT IN ('COMPLETED', 'CANCELLED')
+                OR (status = 'COMPLETED' AND updated_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes')
+            )
+            ORDER BY updated_at DESC LIMIT 1
         """
         return await self.fetch_one(query, chat_id, self.shop_id)
 

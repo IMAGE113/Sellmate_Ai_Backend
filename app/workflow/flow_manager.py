@@ -66,6 +66,10 @@ class FlowManager:
         if intent == "HUMAN_TAKEOVER":
             return "HUMAN_TAKEOVER"
 
+        # BUG-27: Handle retry escalation
+        if self.order_data.get("retry_count", 0) >= 3:
+            return "HUMAN_TAKEOVER"
+
         # BUG-21: Handle MENU_QUERY and VIEW_SUMMARY regardless of state
         if intent == "MENU_QUERY":
             return "MENU_INFO"

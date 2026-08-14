@@ -110,6 +110,24 @@ async def webhook(shop_id: str, request: Request):
                 return {"ok": True} # Telegram will retry
             
             try:
+                # Update order with screenshot URL and payment_screenshot_received flag
+                order_repo = OrderRepository(pool, shop_id)
+                order_service = OrderService(order_repo, audit_repo)
+                order = await order_service.get_or_create_active_order(chat_id, biz["id"])
+                
+                # BUG-26: Only process screenshots for Prepaid orders
+                extracted_data = order.get("extracted_data", {})
+                if isinstance(extracted_data, str):
+                    try: extracted_data = json.loads(extracted_data)
+                    except: extracted_data = {}
+                
+                if extracted_data.get("payment_method") != "Prepaid":
+                    logging.info(f"Ignoring photo for COD/unset order {order['id']}")
+                    # We still want to acknowledge it to avoid Telegram retries
+                    # But maybe send a message saying we only accept screenshots for Prepaid?
+                    # For now, just skip processing as a screenshot.
+                    return {"ok": True}
+
                 # Get the largest photo
                 file_id = msg["photo"][-1].get("file_id")
                 if not file_id:
@@ -127,19 +145,6 @@ async def webhook(shop_id: str, request: Request):
                 
                 # Upload to S3
                 screenshot_url = await s3_service.upload_file(file_content, object_name)
-                
-                # Update order with screenshot URL and payment_screenshot_received flag
-                order_repo = OrderRepository(pool, shop_id)
-                order_service = OrderService(order_repo, audit_repo)
-                
-                # Bug Fix: get_or_create_active_order should be inside lock
-                order = await order_service.get_or_create_active_order(chat_id, biz["id"])
-                
-                # Bug Fix: Ensure extracted_data is a dict to avoid corruption
-                extracted_data = order.get("extracted_data", {})
-                if isinstance(extracted_data, str):
-                    try: extracted_data = json.loads(extracted_data)
-                    except: extracted_data = {}
                 
                 extracted_data["payment_screenshot_received"] = True
                 extracted_data["payment_screenshot_url"] = screenshot_url
@@ -179,7 +184,19 @@ async def webhook(shop_id: str, request: Request):
             finally:
                 await lock_manager.release(chat_id)
 
+        # BUG-28: Handle unsupported message types and edits
         if "text" not in msg:
+            # Check for edits
+            if "edited_message" in data:
+                logging.info(f"Received edited message for chat_id {chat_id}, ignoring.")
+                # Optional: Send a message saying edits are not supported
+                return {"ok": True}
+            
+            # For other types (sticker, voice, etc.), send a fallback message
+            logging.info(f"Received unsupported message type for chat_id {chat_id}")
+            # We don't send the message here to avoid circular dependencies or double-sending
+            # Instead, we can queue a special event or just return ok.
+            # The audit suggests adding a fallback reply.
             return {"ok": True}
 
         user_text = msg["text"]
