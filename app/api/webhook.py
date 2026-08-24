@@ -2,6 +2,9 @@ import hashlib
 import logging
 import httpx
 import json
+import time
+import unicodedata
+from collections import defaultdict, deque
 from fastapi import APIRouter, Request, HTTPException
 import uuid
 from app.db.database import get_db_pool, MerchantRepository, AuditRepository, OrderRepository
@@ -11,8 +14,40 @@ from app.schemas.queue import QueuePayloadSchema
 from app.services.s3_service import s3_service
 from app.services.telegram_service import telegram_service
 from app.services.order_service import OrderService
+from app.services.telegram import send
 
 router = APIRouter()
+_MAX_TEXT_LENGTH = 4000
+_DUPLICATE_WINDOW_SECONDS = 3
+_CHAT_WINDOW_SECONDS = 60
+_CHAT_MESSAGE_LIMIT = 30
+_recent_messages = {}
+_chat_message_windows = defaultdict(deque)
+
+
+def _has_meaningful_text(value: str) -> bool:
+    return bool(value and any(unicodedata.category(ch)[0] in {"L", "N"} for ch in value))
+
+
+def _is_duplicate_or_spam(shop_id: str, chat_id: int, text: str) -> bool:
+    now = time.monotonic()
+    # Bound the process-local cache so long-running workers do not retain old chat data.
+    expired = [key for key, seen_at in _recent_messages.items() if now - seen_at > _DUPLICATE_WINDOW_SECONDS]
+    for old_key in expired:
+        _recent_messages.pop(old_key, None)
+    key = (shop_id, chat_id, text)
+    previous = _recent_messages.get(key)
+    _recent_messages[key] = now
+    if previous is not None and now - previous <= _DUPLICATE_WINDOW_SECONDS:
+        return True
+
+    window = _chat_message_windows[(shop_id, chat_id)]
+    while window and now - window[0] > _CHAT_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= _CHAT_MESSAGE_LIMIT:
+        return True
+    window.append(now)
+    return False
 
 @router.post("/webhook/{shop_id}")
 async def webhook(shop_id: str, request: Request):
@@ -79,11 +114,41 @@ async def webhook(shop_id: str, request: Request):
                 "from": cb_from
             }
 
-        msg = data.get("message")
+        edited_message = data.get("edited_message")
+        msg = data.get("message") or edited_message
         if not msg:
             return {"ok": True}
 
-        chat_id = msg["chat"]["id"]
+        chat_id = msg.get("chat", {}).get("id")
+        if not chat_id:
+            return {"ok": True}
+
+        # Edited Telegram messages are not replayed as new customer answers. Acknowledge
+        # them explicitly so the customer can resend the correction as a new message.
+        if edited_message is not None:
+            await send(token, chat_id, "Please send corrections as a new text message.")
+            if update_id:
+                await idempotency_service.check_and_mark(update_id)
+            return {"ok": True}
+
+        # Reject blank, emoji-only, and punctuation-only text before queueing it.
+        if "text" in msg:
+            user_text = msg.get("text") or ""
+            if not _has_meaningful_text(user_text):
+                await send(token, chat_id, "Please type your answer using text.")
+                if update_id:
+                    await idempotency_service.check_and_mark(update_id)
+                return {"ok": True}
+            if len(user_text) > _MAX_TEXT_LENGTH:
+                await send(token, chat_id, "That message is too long. Please send a shorter answer.")
+                if update_id:
+                    await idempotency_service.check_and_mark(update_id)
+                return {"ok": True}
+            if _is_duplicate_or_spam(shop_id, chat_id, user_text.strip()):
+                await send(token, chat_id, "Please wait a moment and send one message at a time.")
+                if update_id:
+                    await idempotency_service.check_and_mark(update_id)
+                return {"ok": True}
         
         # Handle Photo Uploads (Screenshots)
         if "photo" in msg:
@@ -123,9 +188,9 @@ async def webhook(shop_id: str, request: Request):
                 
                 if extracted_data.get("payment_method") != "Prepaid":
                     logging.info(f"Ignoring photo for COD/unset order {order['id']}")
-                    # We still want to acknowledge it to avoid Telegram retries
-                    # But maybe send a message saying we only accept screenshots for Prepaid?
-                    # For now, just skip processing as a screenshot.
+                    await send(token, chat_id, "This order is not using prepaid payment. Please continue by typing your answer.")
+                    if update_id:
+                        await idempotency_service.check_and_mark(update_id)
                     return {"ok": True}
 
                 # Get the largest photo
@@ -184,19 +249,12 @@ async def webhook(shop_id: str, request: Request):
             finally:
                 await lock_manager.release(chat_id)
 
-        # BUG-28: Handle unsupported message types and edits
+        # BUG-28: Handle unsupported message types with an explicit recovery reply.
         if "text" not in msg:
-            # Check for edits
-            if "edited_message" in data:
-                logging.info(f"Received edited message for chat_id {chat_id}, ignoring.")
-                # Optional: Send a message saying edits are not supported
-                return {"ok": True}
-            
-            # For other types (sticker, voice, etc.), send a fallback message
             logging.info(f"Received unsupported message type for chat_id {chat_id}")
-            # We don't send the message here to avoid circular dependencies or double-sending
-            # Instead, we can queue a special event or just return ok.
-            # The audit suggests adding a fallback reply.
+            await send(token, chat_id, "I can only understand text messages right now. Please type your answer.")
+            if update_id:
+                await idempotency_service.check_and_mark(update_id)
             return {"ok": True}
 
         user_text = msg["text"]

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 import os
+import unicodedata
 from decimal import Decimal
 from typing import Any
 from app.db.database import get_db_pool, OrderRepository, MerchantRepository, AuditRepository, ProductRepository
@@ -40,6 +41,10 @@ def force_dict(data: Any) -> dict:
         except:
             return {}
     return {}
+
+
+def has_meaningful_text(value: str) -> bool:
+    return bool(value and any(unicodedata.category(ch)[0] in {"L", "N"} for ch in value))
 # ==========================================
 
 async def run_worker():
@@ -182,6 +187,12 @@ async def run_worker():
 
                 # 2. Determine Current State
                 current_state = flow.get_current_state()
+
+                # Batch 5: malformed queue payloads must not reach the AI or overwrite data.
+                if not has_meaningful_text(user_text) or len(user_text) > 4000:
+                    await send(biz["tg_bot_token"], chat_id, flow.get_response(current_state, biz["name"]))
+                    await queue_manager.complete(task["id"])
+                    continue
                 
                 # 3. Handle Required Fields (Rule 3: Priority Bypass AI Extraction)
                 extracted_data = {}
