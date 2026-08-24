@@ -22,11 +22,12 @@ class WebhookSecurity:
 
     @staticmethod
     async def validate_request(request: Request, secret: str):
-        # 1. Signature Verification (if provided by platform)
+        # 1. Signature verification is mandatory whenever a secret is configured.
         signature = request.headers.get("X-SellMate-Signature")
         body = await request.body()
-        
-        if signature and not WebhookSecurity.verify_signature(body, signature, secret):
+        if secret and not signature:
+            raise HTTPException(status_code=401, detail="Missing signature")
+        if secret and not WebhookSecurity.verify_signature(body, signature, secret):
             raise HTTPException(status_code=401, detail="Invalid signature")
 
         # 2. Replay Attack Prevention (Timestamp check)

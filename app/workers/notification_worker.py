@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import httpx
 from app.db.database import get_db_pool
 
 async def run_notification_worker():
@@ -68,5 +69,18 @@ async def run_notification_worker():
 
 
 async def send_telegram_message(token, chat_id, text):
-    logging.info(f"Sending Telegram message to {chat_id}: {text}")
-    return True
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                url,
+                json={"chat_id": chat_id, "text": str(text or "")[:4096]},
+            )
+        if response.status_code != 200:
+            logging.error("Telegram notification failed with status %s", response.status_code)
+            return False
+        body = response.json()
+        return bool(body.get("ok"))
+    except Exception:
+        logging.exception("Telegram notification request failed")
+        return False

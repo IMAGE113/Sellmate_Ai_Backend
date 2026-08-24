@@ -85,7 +85,13 @@ async def get_current_merchant(authorization: Optional[str] = Header(None)):
 
 # Dependency for Super Admin access
 async def get_super_admin(current_merchant = Depends(get_current_merchant)):
-    if current_merchant.get("role") != "SUPER_ADMIN":
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        role = await conn.fetchval(
+            "SELECT role FROM merchant_admins WHERE shop_id = $1 AND active_status = TRUE ORDER BY id LIMIT 1",
+            current_merchant["shop_id"],
+        )
+    if role != "SUPER_ADMIN":
         raise HTTPException(status_code=403, detail="Super Admin access required")
     return current_merchant
 

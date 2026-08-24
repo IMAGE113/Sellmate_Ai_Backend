@@ -376,6 +376,10 @@ async def run_worker():
                                 reply_context = {"product_name": "", "available_stock": 0}
 
                         if all_stock_available:
+                            new_extracted_data["inventory_reservations"] = [
+                                {"product_id": product_id, "qty": quantity}
+                                for product_id, quantity in deductions_by_product.items()
+                            ]
                             from app.services.id_generator import generate_order_number
                             order_num = await generate_order_number(pool)
                             new_extracted_data["is_finalized"] = True

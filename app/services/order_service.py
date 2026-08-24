@@ -75,32 +75,26 @@ class OrderService:
         if new_status == 'CANCELLED' and extracted_data.get('is_finalized'):
             from app.db.database import ProductRepository
             product_repo = ProductRepository(self.order_repo.pool, order['shop_id'])
-            
-            for item in extracted_data.get('items', []):
-                product_name = item.get('name')
-                quantity = item.get('qty', 0)
-                if product_name and quantity > 0:
-                    # Find the exact product/variant that was deducted
-                    parent_product = await product_repo.get_product_by_name(product_name)
-                    if parent_product:
-                        product = None
-                        variants = await product_repo.get_variants_for_product(parent_product["id"])
-                        if variants:
-                            attributes = {k: v for k, v in item.items() if k in ["size", "color", "sugar_level", "ice_level"]}
-                            if attributes:
-                                product = await product_repo.get_product_variant(product_name, attributes)
-                            if not product:
-                                details = item.get("details", "").lower()
-                                for v in variants:
-                                    if v["name"].lower() in details:
-                                        product = v
-                                        break
-                        else:
-                            product = parent_product
-                        
-                        if product:
-                            # Restore stock (negative deduction)
-                            await product_repo.update_product_stock(product["id"], -quantity)
+            reservations = extracted_data.get("inventory_reservations") or []
+            if reservations:
+                restorations = [
+                    (entry.get("product_id"), entry.get("qty"))
+                    for entry in reservations
+                    if entry.get("product_id") is not None
+                ]
+                if not await product_repo.restore_stock_batch(restorations):
+                    raise RuntimeError("Unable to restore finalized order inventory")
+            else:
+                # Legacy finalized orders lack reservation IDs. Restore only unambiguous
+                # parent products; never guess a variant from free-form details.
+                for item in extracted_data.get('items', []):
+                    product_name = item.get('name')
+                    quantity = item.get('qty', 0)
+                    attributes = {k: v for k, v in item.items() if k in ["size", "color", "sugar_level", "ice_level"] and v}
+                    if product_name and quantity > 0 and not attributes:
+                        parent_product = await product_repo.get_product_by_name(product_name)
+                        if parent_product and not await product_repo.get_variants_for_product(parent_product["id"]):
+                            await product_repo.restore_stock_batch([(parent_product["id"], quantity)])
 
         await self.order_repo.update_order_status(order_id, new_status, actor, description)
         await self.audit_repo.log_event(

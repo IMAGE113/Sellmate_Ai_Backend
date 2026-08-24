@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.db.database import get_db_pool, init_db
+from app.db.database import get_db_pool, init_db, close_db_pool
+from app.core.config import CORS_ORIGINS
 from app.api.webhook import router as webhook_router
 from app.api.auth_router import router as auth_router
 from app.api.dashboard_router import router as dashboard_router
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(order_worker_task, notification_worker_task, cleanup_worker_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
+    await close_db_pool()
 
 class CorrelationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -67,7 +69,7 @@ app.add_middleware(CorrelationMiddleware)
 # Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,6 +97,6 @@ async def health():
             await conn.execute("SELECT 1")
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        logging.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        logging.error("Health check failed: %s", e)
+        raise HTTPException(status_code=503, detail="Database unavailable")
 

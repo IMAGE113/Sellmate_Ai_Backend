@@ -1,7 +1,11 @@
 import json
-import httpx  # Webhook လှမ်းခေါ်ဖို့အတွက် သေချာပေါက် ပါရမယ်
+import logging
+import os
+import httpx
+  # Webhook လှမ်းခေါ်ဖို့အတွက် သေချာပေါက် ပါရမယ်
 from typing import Dict, Any, List, Optional
 from app.db.database import BaseRepository
+from app.core.config import TELEGRAM_WEBHOOK_SECRET
 
 class DashboardRepository(BaseRepository):
     async def get_order_stats(self) -> Dict[str, Any]:
@@ -147,21 +151,28 @@ class DashboardRepository(BaseRepository):
         # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
         if bot_token:
             # 💡 မင်းရဲ့ webhook.py လမ်းကြောင်းအတိုင်း /webhook/{shop_id} ကို dynamic ချိတ်ပေးလိုက်တယ်
-            webhook_url = f"https://sellmate-ai-backend.onrender.com/webhook/{self.shop_id}"
+            webhook_base = os.getenv("PUBLIC_WEBHOOK_BASE_URL") or os.getenv("DOMAIN")
+            if not webhook_base:
+                logging.error("Cannot configure Telegram webhook: PUBLIC_WEBHOOK_BASE_URL is not set")
+                return
+            webhook_url = f"{webhook_base.rstrip('/')}/webhook/{self.shop_id}"
             telegram_url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
             
             try:
                 # httpx client သုံးပြီး Telegram API ဆီ Request ပို့မယ်
                 async with httpx.AsyncClient() as client:
-                    response = await client.get(telegram_url, params={"url": webhook_url})
+                    webhook_params = {"url": webhook_url}
+                    if TELEGRAM_WEBHOOK_SECRET:
+                        webhook_params["secret_token"] = TELEGRAM_WEBHOOK_SECRET
+                    response = await client.get(telegram_url, params=webhook_params)
                     res_data = response.json()
                     
                     if res_data.get("ok"):
-                        print(f"✅ Webhook set successfully for shop_id: {self.shop_id} to {webhook_url}")
+                        logging.info("Webhook set successfully for shop_id=%s", self.shop_id)
                     else:
-                        print(f"❌ Telegram Webhook Config Failed: {res_data.get('description')}")
+                        logging.error("Telegram webhook configuration failed for shop_id=%s: %s", self.shop_id, res_data.get("description"))
             except Exception as e:
-                print(f"⚠️ Error occurred while automating webhook: {str(e)}")
+                logging.exception("Telegram webhook configuration error for shop_id=%s", self.shop_id)
 
 class DashboardService:
     def __init__(self, dashboard_repo: DashboardRepository):

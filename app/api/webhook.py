@@ -15,6 +15,7 @@ from app.services.s3_service import s3_service
 from app.services.telegram_service import telegram_service
 from app.services.order_service import OrderService
 from app.services.telegram import send
+from app.core.config import TELEGRAM_WEBHOOK_SECRET
 
 router = APIRouter()
 _MAX_TEXT_LENGTH = 4000
@@ -52,6 +53,10 @@ def _is_duplicate_or_spam(shop_id: str, chat_id: int, text: str) -> bool:
 @router.post("/webhook/{shop_id}")
 async def webhook(shop_id: str, request: Request):
     try:
+        if TELEGRAM_WEBHOOK_SECRET:
+            provided_secret = getattr(request, "headers", {}).get("X-Telegram-Bot-Api-Secret-Token")
+            if provided_secret != TELEGRAM_WEBHOOK_SECRET:
+                raise HTTPException(status_code=401, detail="Invalid webhook secret")
         try:
             data = await request.json()
         except Exception:

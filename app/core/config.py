@@ -10,13 +10,16 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DOMAIN = os.getenv("DOMAIN", "localhost")
 
 # JWT Configuration
-JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 
 # Server Configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
+PUBLIC_WEBHOOK_BASE_URL = os.getenv("PUBLIC_WEBHOOK_BASE_URL", "").rstrip("/")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
 # Telegram Configuration
 TELEGRAM_API_BASE = "https://api.telegram.org"
@@ -30,3 +33,6 @@ if not DATABASE_URL:
 
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is not set.")
+
+if not JWT_SECRET or JWT_SECRET == "your-secret-key-change-in-production":
+    raise ValueError("JWT_SECRET must be set to a non-default secret.")

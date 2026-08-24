@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from app.db.database import get_db_pool
 from app.services.dashboard_service import DashboardRepository
@@ -16,6 +17,8 @@ async def get_dashboard_overview(current_merchant = Depends(get_current_merchant
 
 @router.get("/orders")
 async def get_orders(limit: int = 10, offset: int = 0, status: str = None, current_merchant = Depends(get_current_merchant)):
+    if not 1 <= limit <= 100 or offset < 0:
+        raise HTTPException(status_code=400, detail="Invalid pagination")
     pool = await get_db_pool()
     shop_id = current_merchant["shop_id"]
     dashboard_repo = DashboardRepository(pool, shop_id)
@@ -68,11 +71,25 @@ async def create_product(product_data: dict, current_merchant = Depends(get_curr
     
     if not name or price is None:
         raise HTTPException(status_code=400, detail="Product name and price are required")
+    try:
+        price = float(price)
+        stock = int(stock)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Price and stock must be numeric")
+    if price < 0 or stock < 0:
+        raise HTTPException(status_code=400, detail="Price and stock cannot be negative")
         
     is_active = True if status == "active" else False
     
     try:
         async with pool.acquire() as conn:
+            if variant_of_id is not None:
+                parent_exists = await conn.fetchval(
+                    "SELECT 1 FROM products WHERE id = $1 AND shop_id = $2 AND variant_of_id IS NULL",
+                    variant_of_id, shop_id
+                )
+                if not parent_exists:
+                    raise HTTPException(status_code=400, detail="Invalid variant parent")
             row = await conn.fetchrow(
                 """
                 INSERT INTO products (shop_id, name, price, stock, is_active, variant_of_id, attributes, sku, created_at)
@@ -81,11 +98,13 @@ async def create_product(product_data: dict, current_merchant = Depends(get_curr
                           CASE WHEN is_active = true THEN 'active' ELSE 'inactive' END as status,
                           variant_of_id, attributes, sku, created_at as created_date
                 """,
-                shop_id, name, float(price), int(stock), is_active, variant_of_id, json.dumps(attributes), sku
+                shop_id, name, price, stock, is_active, variant_of_id, json.dumps(attributes), sku
             )
             return {"success": True, "data": dict(row) if row else {}}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create product")
 
 @router.put("/products/{product_id}")
 async def update_product(product_id: int, product_data: dict, current_merchant = Depends(get_current_merchant)):
@@ -116,6 +135,11 @@ async def update_product(product_id: int, product_data: dict, current_merchant =
                 val = float(val)
             elif key in ["quantity", "stock"]:
                 val = int(val)
+                if val < 0:
+                    raise HTTPException(status_code=400, detail="Stock cannot be negative")
+            elif key == "variant_of_id":
+                if val is not None:
+                    val = int(val)
             elif key == "attributes":
                 val = json.dumps(val)
                 
@@ -125,6 +149,17 @@ async def update_product(product_id: int, product_data: dict, current_merchant =
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
         
+    if "price" in product_data and float(product_data["price"]) < 0:
+        raise HTTPException(status_code=400, detail="Price cannot be negative")
+    if "variant_of_id" in product_data and product_data["variant_of_id"] is not None:
+        async with pool.acquire() as conn:
+            parent_exists = await conn.fetchval(
+                "SELECT 1 FROM products WHERE id = $1 AND shop_id = $2 AND variant_of_id IS NULL",
+                int(product_data["variant_of_id"]), shop_id
+            )
+            if not parent_exists:
+                raise HTTPException(status_code=400, detail="Invalid variant parent")
+
     query = f"""
         UPDATE products 
         SET {", ".join(update_fields)}
@@ -139,8 +174,10 @@ async def update_product(product_id: int, product_data: dict, current_merchant =
             if not row:
                 raise HTTPException(status_code=404, detail="Product not found")
             return {"success": True, "data": dict(row)}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update product")
 
 @router.delete("/products/{product_id}")
 async def delete_product(product_id: int, current_merchant = Depends(get_current_merchant)):
@@ -153,8 +190,10 @@ async def delete_product(product_id: int, current_merchant = Depends(get_current
             if result == "DELETE 0":
                 raise HTTPException(status_code=404, detail="Product not found")
             return {"success": True, "message": "Product deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete product")
 
 @router.get("/analytics")
 async def get_analytics(current_merchant = Depends(get_current_merchant)):

@@ -1,16 +1,26 @@
 import asyncpg
+import asyncio
 import os
 import json
 from typing import Any, Dict, List, Optional
 from app.core.config import DATABASE_URL
 
 pool = None
+_pool_init_lock = asyncio.Lock()
 
 async def get_db_pool():
     global pool
-    if not pool:
-        pool = await asyncpg.create_pool(DATABASE_URL)
+    if pool is None:
+        async with _pool_init_lock:
+            if pool is None:
+                pool = await asyncpg.create_pool(DATABASE_URL)
     return pool
+
+async def close_db_pool():
+    global pool
+    if pool is not None:
+        await pool.close()
+        pool = None
 
 async def init_db(pool):
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
@@ -141,12 +151,20 @@ class ProductRepository(BaseRepository):
         await self.execute(query, quantity, product_id, self.shop_id)
 
     async def deduct_stock_batch(self, deductions: List[tuple[int, Any]]) -> bool:
-        """Deduct all requested stock atomically, refusing any oversell."""
+        """Deduct all requested stock atomically, refusing invalid quantities and oversell."""
+        aggregated: Dict[int, Any] = {}
+        for product_id, quantity in deductions:
+            try:
+                quantity = float(quantity)
+            except (TypeError, ValueError):
+                return False
+            if quantity <= 0:
+                return False
+            aggregated[product_id] = aggregated.get(product_id, 0) + quantity
+
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # Lock and validate every row before changing any stock. This makes a
-                # failed batch a true no-op rather than a partial deduction.
-                for product_id, quantity in deductions:
+                for product_id, quantity in aggregated.items():
                     row = await conn.fetchrow(
                         "SELECT stock FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE",
                         product_id,
@@ -155,13 +173,34 @@ class ProductRepository(BaseRepository):
                     if row is None or row["stock"] < quantity:
                         return False
 
-                for product_id, quantity in deductions:
+                for product_id, quantity in aggregated.items():
                     await conn.execute(
                         "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3",
                         quantity,
                         product_id,
                         self.shop_id,
                     )
+        return True
+
+    async def restore_stock_batch(self, restorations: List[tuple[int, Any]]) -> bool:
+        aggregated: Dict[int, Any] = {}
+        for product_id, quantity in restorations:
+            try:
+                quantity = float(quantity)
+            except (TypeError, ValueError):
+                return False
+            if quantity <= 0:
+                return False
+            aggregated[product_id] = aggregated.get(product_id, 0) + quantity
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for product_id, quantity in aggregated.items():
+                    result = await conn.execute(
+                        "UPDATE products SET stock = stock + $1 WHERE id = $2 AND shop_id = $3",
+                        quantity, product_id, self.shop_id
+                    )
+                    if result == "UPDATE 0":
+                        return False
         return True
 
     async def get_variants_for_product(self, parent_id: int) -> List[Dict[str, Any]]:

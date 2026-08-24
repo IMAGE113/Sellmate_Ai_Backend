@@ -3,22 +3,24 @@ from app.db.database import BaseRepository
 
 class DeadLetterRepository(BaseRepository):
     async def list_dead_jobs(self, queue_name: Optional[str] = None) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM task_queue WHERE status = 'dead_letter'"
+        query = "SELECT * FROM task_queue WHERE status = 'dead_letter' AND shop_id = $1"
+        args = [self.shop_id]
         if queue_name:
-            query += f" AND queue_name = '{queue_name}'"
-        return await self.fetch_all(query)
+            query += " AND queue_name = $2"
+            args.append(queue_name)
+        return await self.fetch_all(query, *args)
 
     async def retry_job(self, job_id: int):
         query = """
             UPDATE task_queue 
             SET status = 'retrying', retry_count = 0, error_message = NULL, started_at = NULL, completed_at = NULL
-            WHERE id = $1 AND status = 'dead_letter'
+            WHERE id = $1 AND shop_id = $2 AND status = 'dead_letter'
         """
-        await self.execute(query, job_id)
+        await self.execute(query, job_id, self.shop_id)
 
     async def archive_job(self, job_id: int):
-        query = "UPDATE task_queue SET status = 'archived' WHERE id = $1"
-        await self.execute(query, job_id)
+        query = "UPDATE task_queue SET status = 'archived' WHERE id = $1 AND shop_id = $2"
+        await self.execute(query, job_id, self.shop_id)
 
 class DeadLetterService:
     def __init__(self, repo: DeadLetterRepository):
