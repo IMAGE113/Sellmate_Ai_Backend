@@ -42,12 +42,10 @@ async def init_db(pool):
                 await conn.execute(schema_sql)
             except Exception as e:
                 import logging
-                logging.warning(f"Schema initialization warning (possibly existing tables): {e}")
+                logging.error("Schema initialization failed: %s", e)
+                raise
             # Separate index creation to avoid issues if column doesn't exist yet in a single transaction block
-            try:
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);")
-            except Exception:
-                pass
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);")
 
 class BaseRepository:
     def __init__(self, pool: asyncpg.Pool, shop_id: str):
@@ -147,6 +145,8 @@ class ProductRepository(BaseRepository):
         return await self.fetch_one(query, product_name, self.shop_id, json.dumps(attributes))
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
+        if quantity <= 0:
+            raise ValueError("Stock deduction quantity must be positive")
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
         await self.execute(query, quantity, product_id, self.shop_id)
 

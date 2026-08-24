@@ -76,9 +76,20 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
         self.mock_OrderService = patcher_OrderService.start()
         self.addCleanup(patcher_OrderService.stop)
 
+        self.mock_lock_manager = MagicMock()
+        self.mock_lock_manager.acquire = AsyncMock(return_value=True)
+        self.mock_lock_manager.release = AsyncMock(return_value=None)
+        patcher_lock_manager = patch("app.services.lock_manager.LockManager", return_value=self.mock_lock_manager)
+        patcher_lock_manager.start()
+        self.addCleanup(patcher_lock_manager.stop)
+        patcher_lock_repo = patch("app.services.lock_manager.LockRepository", return_value=MagicMock())
+        patcher_lock_repo.start()
+        self.addCleanup(patcher_lock_repo.stop)
+
         # Mock Request object
         self.mock_request = AsyncMock()
         self.mock_request.json.return_value = {}
+        self.mock_idempotency_repo.is_processed.return_value = False
 
     # Test for webhook_receiver (text message)
     async def test_webhook_text_message(self):
@@ -86,13 +97,13 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
             "update_id": 123,
             "message": {"chat": {"id": 456}, "text": "Hello"}
         }
-        self.mock_idempotency_service.check_and_mark.return_value = False
+        self.mock_idempotency_repo.is_processed.return_value = False
         self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
         self.mock_queue_manager.push.return_value = None
 
         response = await webhook("shop1", self.mock_request)
         self.assertEqual(response, {"ok": True})
-        self.mock_idempotency_service.check_and_mark.assert_called_once_with(123)
+        self.mock_idempotency_repo.is_processed.assert_called_once_with(123)
         self.mock_merchant_repo.get_merchant_by_shop_id.assert_called_once_with()
         self.mock_queue_manager.push.assert_called_once()
 
@@ -105,12 +116,12 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
                 "photo": [{"file_id": "file_abc", "width": 100, "height": 100}]
             }
         }
-        self.mock_idempotency_service.check_and_mark.return_value = False
+        self.mock_idempotency_repo.is_processed.return_value = False
         self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
         self.mock_telegram_service.get_file_path.return_value = "photos/file_abc.jpg"
         self.mock_telegram_service.download_file.return_value = b"image_content"
         self.mock_s3_service.upload_file.return_value = "https://s3.url/image.jpg"
-        self.mock_order_service.get_or_create_active_order.return_value = {"id": 102, "extracted_data": {}}
+        self.mock_order_service.get_or_create_active_order.return_value = {"id": 102, "extracted_data": {"payment_method": "Prepaid"}}
         self.mock_order_repo.execute.return_value = None
         self.mock_audit_repo.log_event.return_value = None
         self.mock_queue_manager.push.return_value = None
@@ -128,17 +139,17 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
     # Test for webhook_receiver (duplicate update_id)
     async def test_webhook_duplicate_update_id(self):
         self.mock_request.json.return_value = {"update_id": 125, "message": {"chat": {"id": 458}, "text": "Duplicate"}}
-        self.mock_idempotency_service.check_and_mark.return_value = True
+        self.mock_idempotency_repo.is_processed.return_value = True
 
         response = await webhook("shop1", self.mock_request)
         self.assertEqual(response, {"ok": True})
-        self.mock_idempotency_service.check_and_mark.assert_called_once_with(125)
+        self.mock_idempotency_repo.is_processed.assert_called_once_with(125)
         self.mock_merchant_repo.get_merchant_by_shop_id.assert_not_called()
 
     # Test for webhook_receiver (merchant not found)
     async def test_webhook_merchant_not_found(self):
         self.mock_request.json.return_value = {"update_id": 126, "message": {"chat": {"id": 459}, "text": "Test"}}
-        self.mock_idempotency_service.check_and_mark.return_value = False
+        self.mock_idempotency_repo.is_processed.return_value = False
         self.mock_merchant_repo.get_merchant_by_shop_id.return_value = None
 
         with self.assertRaises(HTTPException) as cm:
@@ -149,7 +160,7 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
     # Test for webhook_receiver (internal server error)
     async def test_webhook_internal_server_error(self):
         self.mock_request.json.return_value = {"update_id": 127, "message": {"chat": {"id": 460}, "text": "Error"}}
-        self.mock_idempotency_service.check_and_mark.side_effect = Exception("DB Error")
+        self.mock_idempotency_repo.is_processed.side_effect = Exception("DB Error")
 
         with self.assertRaises(HTTPException) as cm:
             await webhook("shop1", self.mock_request)

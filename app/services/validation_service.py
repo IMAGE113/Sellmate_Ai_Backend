@@ -31,9 +31,12 @@ class ValidationService:
         if len(name) > 60:
             return False, name[:60]
             
-        # Reject obvious garbage (pure symbols/digits/emoji)
-        # We allow Burmese characters, English letters, and spaces.
-        # Burmese range: \u1000-\u109F
+        # Reject markup/control characters and obvious garbage. Names may contain
+        # English/Burmese letters, spaces, and ordinary name punctuation only.
+        if any(unicodedata.category(ch).startswith("C") for ch in name):
+            return False, name
+        if not re.fullmatch(r"[a-zA-Z\u1000-\u109F\s.'-]+", name):
+            return False, name
         if not re.search(r'[a-zA-Z\u1000-\u109F]', name):
             return False, name
             
@@ -45,13 +48,16 @@ class ValidationService:
         if not phone:
             return False, ""
             
-        # Convert Myanmar digits to ASCII
+        # Convert Myanmar digits to ASCII. Do not silently discard letters or
+        # other non-phone content; malformed input must be rejected.
         my_digits = "၀၁၂၃၄၅၆၇၈၉"
         en_digits = "0123456789"
         digit_map = str.maketrans(my_digits, en_digits)
-        phone = phone.translate(digit_map)
+        phone = phone.translate(digit_map).strip()
+        if not re.fullmatch(r"[+0-9() .-]+", phone):
+            return False, phone
         
-        # Strip all non-numeric
+        # Strip phone punctuation after validating the allowed character set.
         clean_phone = re.sub(r'[^0-9]', '', phone)
         
         # Normalize +959 / 959 to 09

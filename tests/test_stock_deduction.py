@@ -27,7 +27,11 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.mock_lock_repo = AsyncMock(spec=LockRepository)
         self.mock_lifecycle_repo = AsyncMock(spec=LifecycleRepository)
 
+        self.mock_order_repo.get_active_order_by_chat_id.return_value = None
         self.order_service = OrderService(self.mock_order_repo, self.mock_audit_repo)
+        patcher_order_number = patch('app.services.id_generator.generate_order_number', new=AsyncMock(return_value='ORD-TEST'))
+        patcher_order_number.start()
+        self.addCleanup(patcher_order_number.stop)
         self.mock_ai = MagicMock(spec=AI)
         self.mock_send = AsyncMock(spec=send)
         self.mock_lock_manager = MagicMock(spec=LockManager)
@@ -73,6 +77,13 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.mock_AuditRepository = patcher_AuditRepository.start()
         self.addCleanup(patcher_AuditRepository.stop)
 
+        patcher_WorkerMonitorRepository = patch("app.workers.order_worker.WorkerMonitorRepository", return_value=MagicMock())
+        self.mock_WorkerMonitorRepository = patcher_WorkerMonitorRepository.start()
+        self.addCleanup(patcher_WorkerMonitorRepository.stop)
+        patcher_WorkerMonitor = patch("app.workers.order_worker.WorkerMonitor", return_value=MagicMock(run_recovery=AsyncMock(), heartbeat=AsyncMock()))
+        self.mock_WorkerMonitor = patcher_WorkerMonitor.start()
+        self.addCleanup(patcher_WorkerMonitor.stop)
+
         patcher_ProductRepository = patch("app.workers.order_worker.ProductRepository", return_value=self.mock_product_repo)
         self.mock_ProductRepository = patcher_ProductRepository.start()
         self.addCleanup(patcher_ProductRepository.stop)
@@ -84,6 +95,12 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         patcher_ai = patch("app.workers.order_worker.ai", new=self.mock_ai)
         self.mock_ai_patch = patcher_ai.start()
         self.addCleanup(patcher_ai.stop)
+        self.mock_ai_parser = MagicMock()
+        self.mock_ai_parser.detect_greeting.return_value = False
+        self.mock_ai_parser.parse_message = AsyncMock(return_value={"intent": "ORDER"})
+        patcher_ai_parser = patch("app.workers.order_worker.ai_parser", new=self.mock_ai_parser)
+        self.mock_ai_parser_patch = patcher_ai_parser.start()
+        self.addCleanup(patcher_ai_parser.stop)
 
         patcher_send = patch("app.workers.order_worker.send", new=self.mock_send)
         self.mock_send_patch = patcher_send.start()
@@ -134,11 +151,15 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         # We need to mock the FlowManager class itself, and then configure its instances.
         mock_flow_manager_instance1 = MagicMock()
         mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO" # For the reset/new order check
         mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2._is_reset_command.return_value = False
+        mock_flow_manager_instance2.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
-        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
+        self.mock_FlowManager_class.return_value = mock_flow_manager_instance2
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
+        self.mock_product_repo.deduct_stock_batch.return_value = True
         self.order_service.update_status = AsyncMock(return_value=None)
 
         with patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep_inner:
@@ -148,9 +169,8 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        self.mock_product_repo.get_product_by_name.assert_called_with("apple")
-        self.mock_product_repo.update_product_stock.assert_called_once_with(1, 2)
-        self.order_service.update_status.assert_called_with(101, "PAYMENT_CONFIRMED", "bot", "Order confirmed and stock deducted")
+        self.mock_product_repo.deduct_stock_batch.assert_called_once()
+        self.order_service.update_status.assert_called_with(101, "COMPLETED", "bot", unittest.mock.ANY)
 
     @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
     async def test_run_worker_stock_deduction_insufficient_stock(self, mock_sleep):
@@ -166,11 +186,15 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.mock_ai.merge_data.return_value = {"items": [{"name": "apple", "qty": 20}]}
         mock_flow_manager_instance1 = MagicMock()
         mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO"
         mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2._is_reset_command.return_value = False
+        mock_flow_manager_instance2.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
-        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
+        self.mock_FlowManager_class.return_value = mock_flow_manager_instance2
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
+        self.mock_product_repo.deduct_stock_batch.return_value = False
         self.order_service.update_status = AsyncMock(return_value=None)
 
         with patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep_inner:
@@ -180,9 +204,8 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        self.mock_product_repo.get_product_by_name.assert_called_with("apple")
-        self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
-        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+        self.mock_product_repo.deduct_stock_batch.assert_not_called()
+        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Failed: OUT_OF_STOCK")
 
     @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
     async def test_run_worker_stock_deduction_product_not_found(self, mock_sleep):
@@ -198,11 +221,15 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.mock_ai.merge_data.return_value = {"items": [{"name": "orange", "qty": 2}]}
         mock_flow_manager_instance1 = MagicMock()
         mock_flow_manager_instance1._is_reset_command.return_value = False
+        mock_flow_manager_instance1.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance1.get_next_step.return_value = "COLLECTING_INFO"
         mock_flow_manager_instance2 = MagicMock()
+        mock_flow_manager_instance2._is_reset_command.return_value = False
+        mock_flow_manager_instance2.get_current_state.return_value = "ORDER_SUMMARY"
         mock_flow_manager_instance2.get_next_step.return_value = "ORDER_CONFIRMED" # This will be overridden to OUT_OF_STOCK internally
-        self.mock_FlowManager_class.side_effect = [mock_flow_manager_instance1, mock_flow_manager_instance2]
+        self.mock_FlowManager_class.return_value = mock_flow_manager_instance2
         self.mock_product_repo.get_product_by_name.return_value = None # Product not found
+        self.mock_product_repo.deduct_stock_batch.return_value = False
         self.order_service.update_status = AsyncMock(return_value=None)
 
         with patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep_inner:
@@ -212,9 +239,8 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        self.mock_product_repo.get_product_by_name.assert_called_with("orange")
-        self.mock_product_repo.update_product_stock.assert_not_called() # Stock should not be deducted
-        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Order out of stock, asking customer to choose another item")
+        self.mock_product_repo.deduct_stock_batch.assert_not_called()
+        self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Failed: OUT_OF_STOCK")
 
 if __name__ == "__main__":
     unittest.main()

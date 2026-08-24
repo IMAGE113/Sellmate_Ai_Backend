@@ -13,12 +13,12 @@ class TestDataValidation(unittest.IsolatedAsyncioTestCase):
 
     # Test for ValidationService.validate_phone
     def test_validate_phone(self):
-        self.assertTrue(ValidationService.validate_phone("091234567"))
-        self.assertTrue(ValidationService.validate_phone("+95912345678"))
-        self.assertFalse(ValidationService.validate_phone("123"))
-        self.assertFalse(ValidationService.validate_phone("invalid_phone"))
-        self.assertFalse(ValidationService.validate_phone(None))
-        self.assertFalse(ValidationService.validate_phone(""))
+        self.assertTrue(ValidationService.validate_phone("091234567")[0])
+        self.assertTrue(ValidationService.validate_phone("+95912345678")[0])
+        self.assertFalse(ValidationService.validate_phone("123")[0])
+        self.assertFalse(ValidationService.validate_phone("invalid_phone")[0])
+        self.assertFalse(ValidationService.validate_phone(None)[0])
+        self.assertFalse(ValidationService.validate_phone("")[0])
 
     # Test for ValidationService.validate_quantity
     def test_validate_quantity(self):
@@ -91,13 +91,15 @@ class TestDataValidation(unittest.IsolatedAsyncioTestCase):
         # Verify both items exist in the merged result based on actual implementation
         self.assertEqual(len(merged["items"]), 2)
         self.assertEqual(merged["customer_name"], "John")
-        self.assertEqual(merged["phone_no"], "123")
+        self.assertNotIn("phone_no", merged)
 
-        # Test with overlapping items (new should override)
+        # Different variant attributes must remain separate inventory lines.
         existing_data = {"items": [{"name": "apple", "qty": 1, "size": "small"}]}
         new_data = {"items": [{"name": "apple", "qty": 2, "color": "red"}]}
         merged = ai_service.merge_data(existing_data, new_data)
-        self.assertEqual(merged, {"items": [{"name": "apple", "qty": 2, "color": "red"}]})
+        self.assertEqual(len(merged["items"]), 2)
+        self.assertEqual(merged["items"][0]["size"], "small")
+        self.assertEqual(merged["items"][1]["color"], "red")
 
     # Test for make_json_safe
     def test_make_json_safe(self):

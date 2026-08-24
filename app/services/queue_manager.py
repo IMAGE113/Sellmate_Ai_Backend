@@ -39,25 +39,25 @@ class QueueRepository(BaseRepository):
 
     async def mark_completed(self, job_id: int):
         query = """
-            UPDATE task_queue SET 
-                status='completed', 
-                completed_at=NOW(), 
+            UPDATE task_queue SET
+                status='completed',
+                completed_at=NOW(),
                 duration_ms = (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM started_at)) * 1000
-            WHERE id = $1
+            WHERE id = $1 AND ($2::varchar IS NULL OR shop_id = $2)
         """
-        await self.execute(query, job_id)
+        await self.execute(query, job_id, self.shop_id)
 
     async def mark_failed(self, job_id: int, error: str, can_retry: bool = True):
         status = 'retrying' if can_retry else 'dead_letter'
         query = """
-            UPDATE task_queue SET 
-                status=$2, 
-                retry_count=retry_count + 1, 
-                error_message=$3, 
-                heartbeat=NULL 
-            WHERE id = $1
+            UPDATE task_queue SET
+                status=$2,
+                retry_count=retry_count + 1,
+                error_message=$3,
+                heartbeat=NULL
+            WHERE id = $1 AND ($4::varchar IS NULL OR shop_id = $4)
         """
-        await self.execute(query, job_id, status, error)
+        await self.execute(query, job_id, status, error, self.shop_id)
 
 class QueueManager:
     def __init__(self, repo: QueueRepository, worker_id: str):

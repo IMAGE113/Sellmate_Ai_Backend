@@ -1,7 +1,5 @@
 import re
 import os
-from typing import str
-
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename to prevent directory traversal."""
     filename = os.path.basename(filename)

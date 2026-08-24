@@ -11,16 +11,23 @@ class NotificationRepository(BaseRepository):
         return await self.fetch_one(query, business_id, self.shop_id, order_id, admin_chat_id, n_type, message)
 
     async def get_pending_notifications(self) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM notifications WHERE status IN ('PENDING', 'RETRYING') AND retries < 5"
-        return await self.fetch_all(query)
+        query = """
+            SELECT * FROM notifications
+            WHERE shop_id = $1
+              AND status IN ('PENDING', 'RETRYING')
+              AND retry_count < 5
+        """
+        return await self.fetch_all(query, self.shop_id)
 
     async def update_notification_status(self, n_id: int, status: str, retries: int = None):
         query = """
-            UPDATE notifications 
-            SET status = $1, retries = COALESCE($2, retries), last_attempt = CURRENT_TIMESTAMP
-            WHERE id = $3
+            UPDATE notifications
+            SET status = $1,
+                retry_count = COALESCE($2, retry_count),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $3 AND shop_id = $4
         """
-        await self.execute(query, status, retries, n_id)
+        await self.execute(query, status, retries, n_id, self.shop_id)
 
 class NotificationService:
     def __init__(self, notification_repo: NotificationRepository):

@@ -27,7 +27,11 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_lock_repo = AsyncMock(spec=LockRepository)
         self.mock_lifecycle_repo = AsyncMock(spec=LifecycleRepository)
 
+        self.mock_order_repo.get_active_order_by_chat_id.return_value = None
         self.order_service = OrderService(self.mock_order_repo, self.mock_audit_repo)
+        patcher_order_number = patch('app.services.id_generator.generate_order_number', new=AsyncMock(return_value='ORD-TEST'))
+        patcher_order_number.start()
+        self.addCleanup(patcher_order_number.stop)
         self.mock_ai = MagicMock(spec=AI)
         self.mock_send = AsyncMock(spec=send)
         self.mock_lock_manager = MagicMock(spec=LockManager)
@@ -73,6 +77,13 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_AuditRepository = patcher_AuditRepository.start()
         self.addCleanup(patcher_AuditRepository.stop)
 
+        patcher_WorkerMonitorRepository = patch('app.workers.order_worker.WorkerMonitorRepository', return_value=MagicMock())
+        self.mock_WorkerMonitorRepository = patcher_WorkerMonitorRepository.start()
+        self.addCleanup(patcher_WorkerMonitorRepository.stop)
+        patcher_WorkerMonitor = patch('app.workers.order_worker.WorkerMonitor', return_value=MagicMock(run_recovery=AsyncMock(), heartbeat=AsyncMock()))
+        self.mock_WorkerMonitor = patcher_WorkerMonitor.start()
+        self.addCleanup(patcher_WorkerMonitor.stop)
+
         patcher_ProductRepository = patch('app.workers.order_worker.ProductRepository', return_value=self.mock_product_repo)
         self.mock_ProductRepository = patcher_ProductRepository.start()
         self.addCleanup(patcher_ProductRepository.stop)
@@ -81,7 +92,9 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_OrderService = patcher_OrderService.start()
         self.addCleanup(patcher_OrderService.stop)
 
-        self.mock_ai_parser = AsyncMock()
+        self.mock_ai_parser = MagicMock()
+        self.mock_ai_parser.detect_greeting.return_value = False
+        self.mock_ai_parser.parse_message = AsyncMock()
         patcher_ai_parser = patch('app.workers.order_worker.ai_parser', new=self.mock_ai_parser)
         self.mock_ai_parser_patch = patcher_ai_parser.start()
         self.addCleanup(patcher_ai_parser.stop)
@@ -112,9 +125,9 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         flow_manager = FlowManager({}, {})
         self.assertEqual(flow_manager.get_next_step("GREETING"), "GREETING")
 
-        # Test case 4: Ask for items
+        # Test case 4: An order without extracted items remains at the welcome state.
         flow_manager = FlowManager({}, {})
-        self.assertEqual(flow_manager.get_next_step("ORDER"), "ASK_ITEMS")
+        self.assertEqual(flow_manager.get_next_step("ORDER"), "WELCOME")
 
         # Test case 5: Ask for name (Now hard-required in Task 1)
         flow_manager = FlowManager({}, {"items": [{"name": "item1"}]})
@@ -125,7 +138,7 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
             {},
             {"items": [{"name": "item1"}], "customer_name": "test", "phone_no": "123", "address": "abc", "township": "xyz", "payment_method": "COD"}
         )
-        self.assertEqual(flow_manager.get_next_step("ORDER"), "ORDER_CONFIRMED")
+        self.assertEqual(flow_manager.get_next_step("ORDER"), "ORDER_SUMMARY")
 
     # Test for OrderService.get_or_create_active_order
     async def test_order_service_get_or_create_active_order(self):
@@ -201,9 +214,9 @@ class TestOrderWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_ai_parser.parse_message.assert_called_once()
         self.mock_ai_merge.assert_called_once()
         self.mock_order_repo.execute.assert_called_once()
-        self.order_service.update_status.assert_called_once_with(101, "COLLECTING_INFO", "bot", "Bot asking for: GREETING")
+        self.order_service.update_status.assert_not_called()
         self.mock_send.assert_called_once()
-        self.mock_audit_repo.log_event.assert_called_once()
+        self.mock_audit_repo.log_event.assert_not_called()
         self.mock_queue_manager.complete.assert_called_once_with("task1")
         self.mock_lock_manager.release.assert_called_once_with(123)
 
