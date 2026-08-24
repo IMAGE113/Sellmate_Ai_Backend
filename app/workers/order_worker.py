@@ -403,7 +403,10 @@ async def run_worker():
                     for item in new_extracted_data.get("items", []):
                         p_name = item.get("name")
                         qty = item.get("qty", 0)
-                        price = next((p["price"] for p in menu if p["name"] == p_name), 0)
+                        normalized_name = str(p_name or "").strip().casefold()
+                        price = next((p["price"] for p in menu if str(p.get("name", "")).strip().casefold() == normalized_name), 0)
+                        if price == 0 and not any(str(p.get("name", "")).strip().casefold() == normalized_name for p in menu):
+                            logging.warning("Summary item is missing from merchant menu: %s", p_name)
                         total += price * qty
                         summary.append(f"{p_name} x {qty} ({price * qty:.2f})")
                     

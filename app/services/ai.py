@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Any
 http_client = httpx.AsyncClient(timeout=20.0)
 
 class AI:
+    MAX_CART_LINES = 100
     def get_system_prompt(self, shop_name: str, menu: List[Dict], current_data: Dict, merchant_requirements: str = None):
         menu_names = [m["name"] for m in menu]
         
@@ -139,7 +140,8 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                             "details": str(item.get("details")) if item.get("details") else ""
                         }
                         normalized_items.append(normalized_item)
-        normalized["items"] = normalized_items
+        # BUG-42: Bound cart growth before it reaches the state machine or summary.
+        normalized["items"] = normalized_items[: self.MAX_CART_LINES]
 
         # 3. Normalize Scalar Fields (None string -> "")
         # BUG-01, BUG-04, BUG-06, BUG-10: Use ValidationService for consistency

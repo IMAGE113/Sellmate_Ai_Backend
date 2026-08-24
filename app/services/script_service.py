@@ -1,4 +1,6 @@
 from typing import Dict, Optional
+from collections import defaultdict
+import logging
 from app.db.database import BaseRepository
 from app.core.scripts import get_script as get_default_script
 
@@ -38,8 +40,9 @@ class ScriptService:
             self._instance_cache[cache_key] = template
         
         try:
-            return template.format(**kwargs)
-        except Exception:
+            return template.format_map(defaultdict(str, kwargs))
+        except Exception as exc:
+            logging.warning("Failed to format merchant script %s: %s", script_key, exc)
             return template
 
     def invalidate_cache(self, script_key: Optional[str] = None):

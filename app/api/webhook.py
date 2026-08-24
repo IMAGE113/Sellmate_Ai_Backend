@@ -131,6 +131,13 @@ async def webhook(shop_id: str, request: Request):
                 await idempotency_service.check_and_mark(update_id)
             return {"ok": True}
 
+        # Forwarded text is not a reliable answer for the active checkout state.
+        if "text" in msg and (msg.get("forward_origin") or msg.get("forward_from")):
+            await send(token, chat_id, "Please type your answer as a new message instead of forwarding it.")
+            if update_id:
+                await idempotency_service.check_and_mark(update_id)
+            return {"ok": True}
+
         # Reject blank, emoji-only, and punctuation-only text before queueing it.
         if "text" in msg:
             user_text = msg.get("text") or ""

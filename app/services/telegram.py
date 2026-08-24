@@ -7,6 +7,10 @@ async def send(token: str, chat_id: int, text: str, reply_markup: dict = None):
     """
     Sends a message to a Telegram chat.
     """
+    # Keep every outbound message within Telegram's text limit.
+    text = str(text or "")
+    if len(text) > 4096:
+        text = text[:4093] + "..."
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     payload = {

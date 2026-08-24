@@ -55,7 +55,8 @@ class AIParser:
 
     async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]], current_state: Optional[str] = None) -> Dict[str, Any]:
         # 1. Deterministic Rule: Greeting Check
-        if self.detect_greeting(text):
+        # BUG-43: A greeting fast-path is meaningful only at the start of a flow.
+        if current_state == "WELCOME" and self.detect_greeting(text):
             return {"intent": "GREETING"}
 
         # 2. Deterministic Rule: Confirmation Check
