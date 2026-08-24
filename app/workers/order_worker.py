@@ -304,43 +304,67 @@ async def run_worker():
                     # Finalization logic (deduct stock, etc.)
                     if not new_extracted_data.get("is_finalized"):
                         all_stock_available = True
-                        items_to_deduct = []
+                        # Batch 4: aggregate by resolved product ID so duplicate items cannot
+                        # bypass the stock check or deduct the same stock twice.
+                        deductions_by_product = {}
                         menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
                         menu = make_json_safe([dict(m) for m in menu_rows])
                         
                         for item in new_extracted_data.get("items", []):
                             p_name = item.get("name")
-                            qty = item.get("qty", 0)
-                            if p_name and qty > 0:
-                                # BUG-16, BUG-17: Variant-aware and case-insensitive stock check
-                                attributes = {
-                                    "size": item.get("size"),
-                                    "color": item.get("color"),
-                                    "sugar_level": item.get("sugar_level"),
-                                    "ice_level": item.get("ice_level")
+                            try:
+                                qty = float(item.get("qty", 0))
+                            except (TypeError, ValueError):
+                                qty = 0
+                            if not p_name or qty <= 0:
+                                all_stock_available = False
+                                status_key = "OUT_OF_STOCK"
+                                reply_context = {"product_name": p_name or "", "available_stock": 0}
+                                break
+
+                            attributes = {
+                                "size": item.get("size"),
+                                "color": item.get("color"),
+                                "sugar_level": item.get("sugar_level"),
+                                "ice_level": item.get("ice_level")
+                            }
+                            attributes = {k: v for k, v in attributes.items() if v}
+
+                            # Variant attributes are mandatory whenever the order contains them;
+                            # never fall back to the parent product by name alone.
+                            if attributes:
+                                p = await product_repo.get_product_variant(p_name, attributes)
+                            else:
+                                p = await product_repo.get_product_by_name(p_name)
+
+                            if not p:
+                                all_stock_available = False
+                                status_key = "OUT_OF_STOCK"
+                                reply_context = {"product_name": p_name, "available_stock": 0}
+                                break
+
+                            deductions_by_product[p["id"]] = deductions_by_product.get(p["id"], 0) + qty
+
+                            if p["stock"] < deductions_by_product[p["id"]]:
+                                all_stock_available = False
+                                status_key = "OUT_OF_STOCK"
+                                reply_context = {
+                                    "product_name": p_name,
+                                    "available_stock": p["stock"]
                                 }
-                                # Remove empty attributes
-                                attributes = {k: v for k, v in attributes.items() if v}
-                                
-                                p = None
-                                if attributes:
-                                    p = await product_repo.get_product_variant(p_name, attributes)
-                                
-                                if not p:
-                                    # Fallback to parent product with case-insensitive check
-                                    p = await product_repo.get_product_by_name(p_name)
-                                
-                                if not p or p["stock"] < qty:
-                                    all_stock_available = False
-                                    status_key = "OUT_OF_STOCK"
-                                    reply_context = {"product_name": p_name, "available_stock": p["stock"] if p else 0}
-                                    break
-                                items_to_deduct.append((p["id"], qty))
+                                break
                         
                         if all_stock_available:
-                            for p_id, q in items_to_deduct:
-                                await product_repo.update_product_stock(p_id, q)
-                            
+                            # The conditional UPDATEs run in one transaction; a concurrent
+                            # order cannot oversell stock, and a failed item rolls back all deductions.
+                            all_stock_available = await product_repo.deduct_stock_batch(
+                                list(deductions_by_product.items())
+                            )
+                            if not all_stock_available:
+                                status_key = "OUT_OF_STOCK"
+                                reply_context = {"product_name": "", "available_stock": 0}
+
+                        if all_stock_available:
                             from app.services.id_generator import generate_order_number
                             order_num = await generate_order_number(pool)
                             new_extracted_data["is_finalized"] = True

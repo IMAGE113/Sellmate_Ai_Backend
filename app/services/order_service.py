@@ -88,7 +88,7 @@ class OrderService:
                         if variants:
                             attributes = {k: v for k, v in item.items() if k in ["size", "color", "sugar_level", "ice_level"]}
                             if attributes:
-                                product = await product_repo.get_product_variant(parent_product["id"], attributes)
+                                product = await product_repo.get_product_variant(product_name, attributes)
                             if not product:
                                 details = item.get("details", "").lower()
                                 for v in variants:

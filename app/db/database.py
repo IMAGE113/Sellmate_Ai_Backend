@@ -140,6 +140,30 @@ class ProductRepository(BaseRepository):
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
         await self.execute(query, quantity, product_id, self.shop_id)
 
+    async def deduct_stock_batch(self, deductions: List[tuple[int, Any]]) -> bool:
+        """Deduct all requested stock atomically, refusing any oversell."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Lock and validate every row before changing any stock. This makes a
+                # failed batch a true no-op rather than a partial deduction.
+                for product_id, quantity in deductions:
+                    row = await conn.fetchrow(
+                        "SELECT stock FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE",
+                        product_id,
+                        self.shop_id,
+                    )
+                    if row is None or row["stock"] < quantity:
+                        return False
+
+                for product_id, quantity in deductions:
+                    await conn.execute(
+                        "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3",
+                        quantity,
+                        product_id,
+                        self.shop_id,
+                    )
+        return True
+
     async def get_variants_for_product(self, parent_id: int) -> List[Dict[str, Any]]:
         query = "SELECT * FROM products WHERE variant_of_id = $1 AND shop_id = $2 AND is_active = TRUE"
         return await self.fetch_all(query, parent_id, self.shop_id)
