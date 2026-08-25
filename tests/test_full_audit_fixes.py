@@ -641,5 +641,36 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(getattr(raised.exception, "status_code", None), 401)
 
 
+    async def test_dashboard_products_include_inventory_metadata(self):
+        from app.api import dashboard_router
+
+        conn = AsyncMock()
+        conn.fetch.return_value = [
+            {
+                "product_id": 7,
+                "product_name": "Widget",
+                "price": 12.5,
+                "quantity": 4,
+                "sku": "WIDGET-001",
+                "variant_of_id": None,
+                "attributes": "{}",
+                "status": "active",
+                "created_date": "2026-08-25T00:00:00",
+            }
+        ]
+        pool = MagicMock()
+        acquire = MagicMock()
+        acquire.__aenter__ = AsyncMock(return_value=conn)
+        acquire.__aexit__ = AsyncMock(return_value=None)
+        pool.acquire.return_value = acquire
+
+        with patch.object(dashboard_router, "get_db_pool", new=AsyncMock(return_value=pool)):
+            result = await dashboard_router.get_products({"shop_id": "shop-a"})
+
+        self.assertEqual(result[0]["sku"], "WIDGET-001")
+        self.assertIsNone(result[0]["variant_of_id"])
+        self.assertIn("sku, variant_of_id, attributes", conn.fetch.await_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

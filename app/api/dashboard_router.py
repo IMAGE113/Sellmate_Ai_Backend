@@ -45,7 +45,8 @@ async def get_products(current_merchant = Depends(get_current_merchant)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id as product_id, name as product_name, price, stock as quantity, 
+            SELECT id as product_id, name as product_name, price, stock as quantity,
+                   sku, variant_of_id, attributes,
                    CASE WHEN is_active = true THEN 'active' ELSE 'inactive' END as status,
                    created_at as created_date
             FROM products 
