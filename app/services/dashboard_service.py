@@ -93,7 +93,8 @@ class DashboardRepository(BaseRepository):
     # ✅ Merchant Profile ကို ဆွဲထုတ်ပေးတဲ့အပိုင်း (workflow_config ကို နဂိုအတိုင်းထားတယ်)
     async def get_merchant_profile(self) -> Optional[Dict[str, Any]]:
         query = """
-            SELECT id, shop_id, name, owner_name, phone, category, status, tg_bot_token, workflow_config, created_at 
+            SELECT id, shop_id, name, name AS shop_name, owner_name, phone,
+                   requirements_text AS requirements, category, status, workflow_config, created_at
             FROM businesses 
             WHERE shop_id = $1
         """
@@ -102,8 +103,6 @@ class DashboardRepository(BaseRepository):
             return None
             
         res = dict(row)
-        db_bot_token = res.get("tg_bot_token")
-        res["bot_token"] = db_bot_token if db_bot_token else ""
         res["bot_username"] = ""
 
         config = res.get("workflow_config")

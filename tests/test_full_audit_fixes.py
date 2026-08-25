@@ -231,6 +231,38 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
         module = importlib.import_module("app.api.dashboard_router")
         self.assertTrue(hasattr(module, "json"))
 
+    async def test_dashboard_profile_matches_dashboard_contract_without_bot_token(self):
+        from app.services.dashboard_service import DashboardRepository
+
+        conn = AsyncMock()
+        conn.fetchrow.return_value = {
+            "id": 1,
+            "shop_id": "shop-a",
+            "name": "Shop A",
+            "shop_name": "Shop A",
+            "owner_name": "Owner A",
+            "phone": "10000001",
+            "requirements": "Deliver in Yangon",
+            "category": None,
+            "status": "ACTIVE",
+            "workflow_config": None,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        acquire = MagicMock()
+        acquire.__aenter__ = AsyncMock(return_value=conn)
+        acquire.__aexit__ = AsyncMock(return_value=None)
+        pool = MagicMock()
+        pool.acquire.return_value = acquire
+
+        profile = await DashboardRepository(pool, "shop-a").get_merchant_profile()
+        query = conn.fetchrow.await_args.args[0]
+        self.assertIn("name AS shop_name", query)
+        self.assertIn("requirements_text AS requirements", query)
+        self.assertNotIn("tg_bot_token", query)
+        self.assertEqual(profile["shop_name"], "Shop A")
+        self.assertEqual(profile["requirements"], "Deliver in Yangon")
+        self.assertNotIn("bot_token", profile)
+
     async def test_dashboard_settings_preserve_token_when_not_supplied(self):
         from app.services.dashboard_service import DashboardRepository
 
