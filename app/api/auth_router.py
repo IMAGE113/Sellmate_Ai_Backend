@@ -44,6 +44,8 @@ class LoginResponse(BaseModel):
     business_id: int
     shop_name: str
     owner_name: str
+    phone: str
+    role: str
     requirements: str
 
 class MerchantInfo(BaseModel):

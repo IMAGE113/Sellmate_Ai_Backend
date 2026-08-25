@@ -211,6 +211,8 @@ class AuthService:
                     "business_id": business["id"],
                     "shop_name": business["name"],
                     "owner_name": business["owner_name"],
+                    "phone": business["phone"],
+                    "role": role,
                     "requirements": business["requirements_text"] or ""
                 }
                 
