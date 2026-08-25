@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/ops", tags=["ops"])
 
 class OpsRepository(BaseRepository):
     async def get_all_merchants(self, status: Optional[str] = None) -> List[dict]:
-        query = "SELECT id, shop_id, name, owner_name, phone, status, created_at FROM businesses"
+        query = "SELECT id, shop_id, name, owner_name, phone, requirements_text AS requirements, status, created_at FROM businesses"
         if status:
             query += " WHERE status = $1"
             return await self.fetch_all(query, status)
@@ -18,6 +18,8 @@ class OpsRepository(BaseRepository):
         query = """
             SELECT 
                 (SELECT COUNT(*) FROM businesses) as total_merchants,
+                (SELECT COUNT(*) FROM businesses WHERE status = 'ACTIVE') as active_merchants,
+                (SELECT COUNT(*) FROM businesses WHERE status = 'SUSPENDED') as suspended_merchants,
                 (SELECT COUNT(*) FROM orders) as total_orders,
                 (SELECT COUNT(*) FROM task_queue WHERE status = 'pending') as pending_tasks,
                 (SELECT COUNT(*) FROM task_queue WHERE status = 'failed') as failed_tasks
