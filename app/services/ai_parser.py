@@ -90,13 +90,22 @@ class AIParser:
         if current_state == "ORDER_SUMMARY" and self.detect_confirmation(text):
             return {"intent": "CONFIRM_ORDER"}
 
-        # 3. Deterministic Rule: Exact initial product requests should not depend on AI availability/output.
+        # 3. Deterministic Rule: Payment-method answers should not depend on AI availability/output.
+        if current_state == "ASK_PAYMENT_METHOD":
+            import re
+            payment_text = text.strip().rstrip(".!?").strip().lower()
+            if re.search(r"\bcod\b", payment_text) and not re.search(r"\bprepaid\b", payment_text):
+                return {"intent": "ORDER", "payment_method": "COD"}
+            if re.search(r"\bprepaid\b", payment_text):
+                return {"intent": "ORDER", "payment_method": "Prepaid"}
+
+        # 4. Deterministic Rule: Exact initial product requests should not depend on AI availability/output.
         if current_state == "WELCOME":
             direct_item = self._extract_direct_menu_item(text, menu)
             if direct_item:
                 return direct_item
 
-        # 4. AI Extraction Fallback
+        # 5. AI Extraction Fallback
         try:
             extracted_json = await ai.extract_data(
                 text, 

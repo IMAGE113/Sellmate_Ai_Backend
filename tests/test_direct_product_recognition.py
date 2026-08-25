@@ -47,6 +47,23 @@ class TestDirectProductRecognition(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["items"][0]["qty"], expected_qty)
             extract.assert_not_awaited()
 
+    async def test_payment_methods_are_normalized_without_ai(self):
+        for text, expected_method in (("Cod", "COD"), ("COD", "COD"), ("Prepaid", "Prepaid")):
+            with self.subTest(text=text), patch(
+                "app.services.ai_parser.ai.extract_data",
+                new=AsyncMock(return_value=json.dumps({"intent": "OTHER", "items": []})),
+            ) as extract:
+                result = await self.parser.parse_message(
+                    text,
+                    self.context,
+                    self.menu,
+                    current_state="ASK_PAYMENT_METHOD",
+                )
+
+            self.assertEqual(result["intent"], "ORDER")
+            self.assertEqual(result["payment_method"], expected_method)
+            extract.assert_not_awaited()
+
     async def test_unknown_product_still_uses_existing_ai_path(self):
         with patch(
             "app.services.ai_parser.ai.extract_data",

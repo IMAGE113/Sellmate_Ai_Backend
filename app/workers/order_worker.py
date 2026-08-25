@@ -209,6 +209,7 @@ async def run_worker():
                 # 3. Handle Required Fields (Rule 3: Priority Bypass AI Extraction)
                 extracted_data = {}
                 intent = "ORDER"
+                validation_error_key = None
                 
                 if current_state in ["ASK_NAME", "ASK_PHONE", "ASK_ADDRESS", "ASK_TOWNSHIP"]:
                     # Bug Fix: Check for exit intents (CANCEL, HUMAN) before trapping in field collection
@@ -268,8 +269,14 @@ async def run_worker():
                                 logging.warning(f"Duplicate field detection: {field_name} matches {normalized_val}")
                                 extracted_data = {"intent": "ORDER"}
                         else:
-                            # If invalid, we don't update the field, effectively re-asking
+                            # If invalid, preserve the state and return a field-specific retry message.
                             extracted_data = {"intent": "ORDER"}
+                            validation_error_key = {
+                                "customer_name": "INVALID_NAME",
+                                "phone_no": "INVALID_PHONE",
+                                "address": "INVALID_ADDRESS",
+                                "township": "INVALID_TOWNSHIP",
+                            }.get(field_name)
                         
                         intent = "ORDER"
                 else:
@@ -320,6 +327,8 @@ async def run_worker():
                 # Refresh flow with new data
                 flow.order_data = new_extracted_data
                 status_key = flow.get_next_step(intent, user_text)
+                if validation_error_key:
+                    status_key = validation_error_key
                 reply_context = {}
 
                 # 5. Handle Terminal Actions (Confirmation/Stock/etc.)
