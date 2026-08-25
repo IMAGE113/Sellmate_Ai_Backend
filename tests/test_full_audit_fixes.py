@@ -134,6 +134,33 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("at least 32 characters", result.stderr)
 
+    def test_deployed_frontend_cors_origins_are_allowed_by_default(self):
+        import subprocess
+        import sys
+
+        env = os.environ.copy()
+        env.update({
+            "DATABASE_URL": "postgresql://qa:qa@127.0.0.1:5432/qa",
+            "GROQ_API_KEY": "qa",
+            "JWT_SECRET": "qa-non-default-secret-0123456789abcdef",
+            "PYTHONPATH": os.getcwd(),
+        })
+        env.pop("CORS_ORIGINS", None)
+        result = subprocess.run(
+            [sys.executable, "-c", "from app.core.config import CORS_ORIGINS; print('\\n'.join(CORS_ORIGINS))"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        origins = set(result.stdout.splitlines())
+        self.assertTrue({
+            "http://localhost:3000",
+            "https://sellmate-merchant-dashboard.onrender.com",
+            "https://sellmate-internal-ops-console.onrender.com",
+            "https://sellmate-ai-landingpage.onrender.com",
+        }.issubset(origins))
+
     def test_fractional_and_boolean_quantities_are_rejected(self):
         from app.services.validation_service import ValidationService
 
