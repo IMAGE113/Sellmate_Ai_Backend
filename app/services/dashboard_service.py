@@ -166,14 +166,14 @@ class DashboardRepository(BaseRepository):
         async with self.pool.acquire() as conn:
             await conn.execute(query, *params)
             
-        # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
-        if bot_token:
-            # 💡 မင်းရဲ့ webhook.py လမ်းကြောင်းအတိုင်း /webhook/{shop_id} ကို dynamic ချိတ်ပေးလိုက်တယ်
-            webhook_base = os.getenv("PUBLIC_WEBHOOK_BASE_URL") or os.getenv("DOMAIN")
-            if not webhook_base:
-                logging.error("Cannot configure Telegram webhook: PUBLIC_WEBHOOK_BASE_URL is not set")
-                return
-            webhook_url = f"{webhook_base.rstrip('/')}/webhook/{self.shop_id}"
+            # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
+            if bot_token:
+                # The webhook router is mounted under /api in app.main.
+                webhook_base = os.getenv("PUBLIC_WEBHOOK_BASE_URL") or os.getenv("DOMAIN")
+                if not webhook_base:
+                    logging.error("Cannot configure Telegram webhook: PUBLIC_WEBHOOK_BASE_URL is not set")
+                    return
+                webhook_url = f"{webhook_base.rstrip('/')}/api/webhook/{self.shop_id}"
             telegram_url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
             
             try:

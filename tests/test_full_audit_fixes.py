@@ -672,5 +672,37 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sku, variant_of_id, attributes", conn.fetch.await_args.args[0])
 
 
+    async def test_dashboard_settings_registers_api_webhook_path(self):
+        from app.services.dashboard_service import DashboardRepository
+
+        conn = AsyncMock()
+        acquire = MagicMock()
+        acquire.__aenter__ = AsyncMock(return_value=conn)
+        acquire.__aexit__ = AsyncMock(return_value=None)
+        pool = MagicMock()
+        pool.acquire.return_value = acquire
+
+        response = MagicMock()
+        response.json.return_value = {"ok": True}
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.get = AsyncMock(return_value=response)
+        token = "123:" + ("a" * 35)
+
+        with patch.dict(
+            os.environ,
+            {"PUBLIC_WEBHOOK_BASE_URL": "https://sellmate-ai-backend.onrender.com"},
+        ), patch(
+            "app.services.dashboard_service.httpx.AsyncClient", return_value=client
+        ):
+            await DashboardRepository(pool, "shop-a").update_merchant_settings({"bot_token": token})
+
+        self.assertEqual(
+            client.get.await_args.kwargs["params"]["url"],
+            "https://sellmate-ai-backend.onrender.com/api/webhook/shop-a",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
