@@ -53,6 +53,32 @@ class AIParser:
     def detect_screenshot(msg: Dict[str, Any]) -> bool:
         return "photo" in msg
 
+    @staticmethod
+    def _extract_direct_menu_item(text: str, menu: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Recognize an unambiguous initial product request without relying on AI."""
+        import re
+
+        prefixes = r"(?:i\s+want|want|order|buy|please(?:\s+(?:order|give\s+me))?)"
+        quantity_unit = r"(?:x|×|pcs?|pieces?|units?)?"
+        cleaned = text.strip().rstrip(".!?").strip()
+
+        for product in menu:
+            name = str(product.get("name", "")).strip() if isinstance(product, dict) else ""
+            if not name:
+                continue
+            name_pattern = re.escape(name)
+            patterns = (
+                rf"^(?:{prefixes}\s+)?{name_pattern}$",
+                rf"^(?:{prefixes}\s+)?(?P<qty>[1-9]\d*)\s*{quantity_unit}\s+{name_pattern}$",
+                rf"^(?:{prefixes}\s+)?{name_pattern}\s*{quantity_unit}\s*(?P<qty>[1-9]\d*)$",
+            )
+            for pattern in patterns:
+                match = re.fullmatch(pattern, cleaned, flags=re.IGNORECASE)
+                if match:
+                    qty = int(match.groupdict().get("qty") or 1)
+                    return {"intent": "ORDER", "items": [{"name": name, "qty": qty}]}
+        return None
+
     async def parse_message(self, text: str, context: Dict[str, Any], menu: List[Dict[str, Any]], current_state: Optional[str] = None) -> Dict[str, Any]:
         # 1. Deterministic Rule: Greeting Check
         # BUG-43: A greeting fast-path is meaningful only at the start of a flow.
@@ -64,7 +90,13 @@ class AIParser:
         if current_state == "ORDER_SUMMARY" and self.detect_confirmation(text):
             return {"intent": "CONFIRM_ORDER"}
 
-        # 2. AI Extraction Fallback
+        # 3. Deterministic Rule: Exact initial product requests should not depend on AI availability/output.
+        if current_state == "WELCOME":
+            direct_item = self._extract_direct_menu_item(text, menu)
+            if direct_item:
+                return direct_item
+
+        # 4. AI Extraction Fallback
         try:
             extracted_json = await ai.extract_data(
                 text, 
