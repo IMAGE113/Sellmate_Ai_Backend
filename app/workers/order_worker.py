@@ -153,11 +153,16 @@ async def run_worker():
                 biz.update(safe_config)
 
                 if biz.get("is_human_takeover_active"):
-                    # Bug Fix: Handle human takeover flow by notifying user instead of silent discard
-                    reply_text = FlowManager(biz, {}).get_response("HUMAN_TAKEOVER", biz["name"])
-                    await send(biz["tg_bot_token"], chat_id, reply_text)
-                    await queue_manager.complete(task["id"])
-                    continue
+                    # Allow an explicit reset to recover the bot from human takeover mode.
+                    if FlowManager(biz, {})._is_reset_command(user_text):
+                        await merchant_repo.set_human_takeover(False)
+                        biz["is_human_takeover_active"] = False
+                    else:
+                        # Handle human takeover flow by notifying the user instead of silent discard
+                        reply_text = FlowManager(biz, {}).get_response("HUMAN_TAKEOVER", biz["name"])
+                        await send(biz["tg_bot_token"], chat_id, reply_text)
+                        await queue_manager.complete(task["id"])
+                        continue
 
                 # Production bug fix: Handle greeting before fetching/creating order
                 # Rule 4: If no active order and user says greeting, start Welcome Flow.
