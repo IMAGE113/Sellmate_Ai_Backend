@@ -153,18 +153,23 @@ class OrderRepository(BaseRepository):
                     """
                     UPDATE orders
                     SET extracted_data = $1,
-                        order_number = $2,
+                        customer_name = $2,
+                        total_price = $3,
+                        order_number = $4,
                         status = 'COMPLETED',
                         timeline = timeline || jsonb_build_object(
                             'timestamp', CURRENT_TIMESTAMP,
                             'status', 'COMPLETED',
                             'actor', 'bot',
-                            'description', $3::text
+                            'description', $5::text
                         ),
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $4 AND shop_id = $5 AND status <> 'COMPLETED'
+                    WHERE id = $6 AND shop_id = $7
+ AND status <> 'COMPLETED'
                     """,
                     json.dumps(extracted_data),
+                    extracted_data.get("customer_name") or None,
+                    extracted_data.get("total_price", 0),
                     order_number,
                     f"Order confirmed: {order_number}",
                     order_id,

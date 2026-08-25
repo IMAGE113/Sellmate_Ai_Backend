@@ -339,6 +339,7 @@ async def run_worker():
                         # Batch 4: aggregate by resolved product ID so duplicate items cannot
                         # bypass the stock check or deduct the same stock twice.
                         deductions_by_product = {}
+                        total_price = Decimal("0")
                         menu_rows = await merchant_repo.fetch_all("SELECT name, price, stock FROM products WHERE shop_id=$1", shop_id)
                         menu = make_json_safe([dict(m) for m in menu_rows])
                         
@@ -376,6 +377,7 @@ async def run_worker():
                                 break
 
                             deductions_by_product[p["id"]] = deductions_by_product.get(p["id"], 0) + qty
+                            total_price += Decimal(str(p.get("price", 0))) * Decimal(str(qty))
 
                             if p["stock"] < deductions_by_product[p["id"]]:
                                 all_stock_available = False
@@ -396,6 +398,7 @@ async def run_worker():
                             order_num = await generate_order_number(pool)
                             new_extracted_data["is_finalized"] = True
                             new_extracted_data["order_number"] = order_num
+                            new_extracted_data["total_price"] = float(total_price)
 
                             # Inventory, order metadata, status, and audit are committed atomically.
                             finalized = await order_repo.finalize_order_with_inventory(
