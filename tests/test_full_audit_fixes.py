@@ -672,7 +672,7 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sku, variant_of_id, attributes", conn.fetch.await_args.args[0])
 
 
-    async def test_dashboard_settings_registers_api_webhook_path(self):
+    async def test_dashboard_settings_registers_root_webhook_path(self):
         from app.services.dashboard_service import DashboardRepository
 
         conn = AsyncMock()
@@ -700,7 +700,7 @@ class TestFullAuditFixes(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             client.get.await_args.kwargs["params"]["url"],
-            "https://sellmate-ai-backend.onrender.com/api/webhook/shop-a",
+            "https://sellmate-ai-backend.onrender.com/webhook/shop-a",
         )
 
 

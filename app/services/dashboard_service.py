@@ -168,12 +168,12 @@ class DashboardRepository(BaseRepository):
             
             # ၂။ Token ရှိတယ်ဆိုရင် Telegram API ဆီကို Webhook လှမ်းဆောက်ခိုင်းမယ် Bro
             if bot_token:
-                # The webhook router is mounted under /api in app.main.
+                # The webhook router is mounted at the application root in app.main.
                 webhook_base = os.getenv("PUBLIC_WEBHOOK_BASE_URL") or os.getenv("DOMAIN")
                 if not webhook_base:
                     logging.error("Cannot configure Telegram webhook: PUBLIC_WEBHOOK_BASE_URL is not set")
                     return
-                webhook_url = f"{webhook_base.rstrip('/')}/api/webhook/{self.shop_id}"
+                webhook_url = f"{webhook_base.rstrip('/')}/webhook/{self.shop_id}"
             telegram_url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
             
             try:
