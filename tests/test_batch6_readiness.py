@@ -88,7 +88,7 @@ class TestBatch6Readiness(unittest.IsolatedAsyncioTestCase):
              patch.object(webhook_module, "send", new=AsyncMock()) as send_mock:
             merchant_cls.return_value.get_merchant_by_shop_id = AsyncMock(return_value={"tg_bot_token": "token"})
             idem_repo_cls.return_value.is_processed = AsyncMock(return_value=False)
-            idem_service_cls.return_value.check_and_mark = AsyncMock()
+            idem_service_cls.return_value.check_and_mark = AsyncMock(return_value=False)
             result = await webhook_module.webhook("shop", request)
             self.assertEqual(result, {"ok": True})
             self.assertIn("forwarding", send_mock.await_args.args[2])

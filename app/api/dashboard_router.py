@@ -1,4 +1,5 @@
 import json
+import math
 from fastapi import APIRouter, Depends, HTTPException
 from app.db.database import get_db_pool
 from app.services.dashboard_service import DashboardRepository
@@ -74,6 +75,8 @@ async def create_product(product_data: dict, current_merchant = Depends(get_curr
     try:
         price = float(price)
         stock = int(stock)
+        if not math.isfinite(price):
+            raise HTTPException(status_code=400, detail="Price must be finite")
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Price and stock must be numeric")
     if price < 0 or stock < 0:
@@ -126,32 +129,41 @@ async def update_product(product_id: int, product_data: dict, current_merchant =
         "sku": "sku"
     }
     
-    for key, val in product_data.items():
-        if key in mapping:
-            col = mapping[key]
-            if key == "status":
-                val = True if val == "active" else False
-            elif key == "price":
-                val = float(val)
-            elif key in ["quantity", "stock"]:
-                val = int(val)
-                if val < 0:
-                    raise HTTPException(status_code=400, detail="Stock cannot be negative")
-            elif key == "variant_of_id":
-                if val is not None:
+    try:
+        for key, val in product_data.items():
+            if key in mapping:
+                col = mapping[key]
+                if key == "status":
+                    val = True if val == "active" else False
+                elif key == "price":
+                    val = float(val)
+                    if not math.isfinite(val):
+                        raise HTTPException(status_code=400, detail="Price must be finite")
+                elif key in ["quantity", "stock"]:
                     val = int(val)
-            elif key == "attributes":
-                val = json.dumps(val)
-                
-            params.append(val)
-            update_fields.append(f"{col} = ${len(params)}")
-            
-    if not update_fields:
-        raise HTTPException(status_code=400, detail="No fields to update")
+                    if val < 0:
+                        raise HTTPException(status_code=400, detail="Stock cannot be negative")
+                elif key == "variant_of_id":
+                    if val is not None:
+                        val = int(val)
+                elif key == "attributes":
+                    val = json.dumps(val)
+
+                params.append(val)
+                update_fields.append(f"{col} = ${len(params)}")
         
-    if "price" in product_data and float(product_data["price"]) < 0:
-        raise HTTPException(status_code=400, detail="Price cannot be negative")
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        if "price" in product_data and float(product_data["price"]) < 0:
+            raise HTTPException(status_code=400, detail="Price cannot be negative")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid product field value")
+
     if "variant_of_id" in product_data and product_data["variant_of_id"] is not None:
+        if int(product_data["variant_of_id"]) == product_id:
+            raise HTTPException(status_code=400, detail="A product cannot be its own variant")
+
         async with pool.acquire() as conn:
             parent_exists = await conn.fetchval(
                 "SELECT 1 FROM products WHERE id = $1 AND shop_id = $2 AND variant_of_id IS NULL",
@@ -221,4 +233,7 @@ async def update_settings(settings: dict, current_merchant = Depends(get_current
     shop_id = current_merchant["shop_id"]
     dashboard_repo = DashboardRepository(pool, shop_id)
     dashboard_service = DashboardService(dashboard_repo)
-    return await dashboard_service.update_settings(settings)
+    try:
+        return await dashboard_service.update_settings(settings)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

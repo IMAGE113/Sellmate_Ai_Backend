@@ -34,5 +34,5 @@ if not DATABASE_URL:
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is not set.")
 
-if not JWT_SECRET or JWT_SECRET == "your-secret-key-change-in-production":
-    raise ValueError("JWT_SECRET must be set to a non-default secret.")
+if not JWT_SECRET or JWT_SECRET == "your-secret-key-change-in-production" or len(JWT_SECRET) < 32:
+    raise ValueError("JWT_SECRET must be set to a non-default secret of at least 32 characters.")

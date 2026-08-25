@@ -43,6 +43,11 @@ async def run_load_test(num_merchants: int, msgs_per_merchant: int):
     results = await asyncio.gather(*tasks)
     
     total_success = sum(r[0] for r in results)
+    if not results:
+        print("✅ Load Test Complete")
+        print("Total Success: 0")
+        print("Throughput: 0.00 msgs/sec")
+        return
     total_time = max(r[1] for r in results)
     
     print(f"✅ Load Test Complete")

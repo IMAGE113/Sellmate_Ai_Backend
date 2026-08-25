@@ -22,6 +22,8 @@ _MAX_TEXT_LENGTH = 4000
 _DUPLICATE_WINDOW_SECONDS = 3
 _CHAT_WINDOW_SECONDS = 60
 _CHAT_MESSAGE_LIMIT = 30
+_MAX_RECENT_KEYS = 10000
+_MAX_CHAT_WINDOWS = 10000
 _recent_messages = {}
 _chat_message_windows = defaultdict(deque)
 
@@ -37,12 +39,22 @@ def _is_duplicate_or_spam(shop_id: str, chat_id: int, text: str) -> bool:
     for old_key in expired:
         _recent_messages.pop(old_key, None)
     key = (shop_id, chat_id, text)
+    if key not in _recent_messages and len(_recent_messages) >= _MAX_RECENT_KEYS:
+        oldest_key = min(_recent_messages, key=_recent_messages.get)
+        _recent_messages.pop(oldest_key, None)
     previous = _recent_messages.get(key)
     _recent_messages[key] = now
     if previous is not None and now - previous <= _DUPLICATE_WINDOW_SECONDS:
         return True
 
-    window = _chat_message_windows[(shop_id, chat_id)]
+    chat_key = (shop_id, chat_id)
+    if chat_key not in _chat_message_windows and len(_chat_message_windows) >= _MAX_CHAT_WINDOWS:
+        oldest_chat = min(
+            _chat_message_windows,
+            key=lambda stored_key: _chat_message_windows[stored_key][-1] if _chat_message_windows[stored_key] else 0,
+        )
+        _chat_message_windows.pop(oldest_chat, None)
+    window = _chat_message_windows[chat_key]
     while window and now - window[0] > _CHAT_WINDOW_SECONDS:
         window.popleft()
     if len(window) >= _CHAT_MESSAGE_LIMIT:
@@ -52,6 +64,9 @@ def _is_duplicate_or_spam(shop_id: str, chat_id: int, text: str) -> bool:
 
 @router.post("/webhook/{shop_id}")
 async def webhook(shop_id: str, request: Request):
+    idempotency_claimed = False
+    update_id = None
+    idempotency_service = None
     try:
         if TELEGRAM_WEBHOOK_SECRET:
             provided_secret = getattr(request, "headers", {}).get("X-Telegram-Bot-Api-Secret-Token")
@@ -68,17 +83,17 @@ async def webhook(shop_id: str, request: Request):
             return {"ok": True}
 
         update_id = data.get("update_id")
+        if update_id is not None and (
+            isinstance(update_id, bool)
+            or not isinstance(update_id, int)
+            or update_id < 0
+            or update_id > 9223372036854775807
+        ):
+            logging.warning("Webhook update_id is invalid")
+            return {"ok": True}
         
         pool = await get_db_pool()
         
-        # 1. Idempotency Check (Read-only check at start)
-        idempotency_repo = IdempotencyRepository(pool, shop_id)
-        idempotency_service = IdempotencyService(idempotency_repo)
-        if update_id:
-            if await idempotency_repo.is_processed(update_id):
-                logging.info(f"Skipping already processed update_id: {update_id}")
-                return {"ok": True}
-
         merchant_repo = MerchantRepository(pool, shop_id)
         audit_repo = AuditRepository(pool, shop_id)
         
@@ -87,34 +102,58 @@ async def webhook(shop_id: str, request: Request):
             logging.warning(f"🚫 Unauthorized shop_id attempt: {shop_id}")
             raise HTTPException(status_code=404, detail="Shop not found")
 
+        # Claim only after tenant validation, preventing unknown paths from filling the idempotency table.
+        idempotency_repo = IdempotencyRepository(pool, shop_id)
+        idempotency_service = IdempotencyService(idempotency_repo)
+        if update_id is not None:
+            if await idempotency_service.check_and_mark(update_id):
+                logging.info(f"Skipping already claimed update_id: {update_id}")
+                return {"ok": True}
+            idempotency_claimed = True
+
         token = biz["tg_bot_token"]
 
         # 2. Callback Query Logic
         if "callback_query" in data:
             cb = data["callback_query"]
+            if not isinstance(cb, dict):
+                logging.warning("Callback query payload is not an object")
+                return {"ok": True}
             callback_id = cb.get("id")
             if not callback_id:
                 logging.warning("Callback query missing ID")
                 return {"ok": True}
 
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-                    json={"callback_query_id": callback_id}
-                )
-            
-            # Defensive field access for callback message
+            # Validate the callback structure before making any external request.
             cb_msg = cb.get("message", {})
-            cb_chat = cb_msg.get("chat", {})
-            cb_data = cb.get("data")
-            cb_from = cb.get("from")
-            
-            if not cb_chat.get("id") or cb_data is None:
-                logging.warning("Callback query missing essential message or data fields")
+            if not isinstance(cb_msg, dict):
+                logging.warning("Callback message payload is not an object")
                 return {"ok": True}
+            cb_chat = cb_msg.get("chat", {})
+            if not isinstance(cb_chat, dict):
+                logging.warning("Callback chat payload is not an object")
+                return {"ok": True}
+            cb_chat_id = cb_chat.get("id")
+            if not isinstance(cb_chat_id, int) or isinstance(cb_chat_id, bool) or not cb_chat_id:
+                logging.warning("Callback chat ID is invalid")
+                return {"ok": True}
+            cb_data = cb.get("data")
+            if not isinstance(cb_data, str) or not cb_data:
+                logging.warning("Callback data is not text")
+                return {"ok": True}
+            cb_from = cb.get("from")
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                        json={"callback_query_id": callback_id}
+                    )
+            except Exception:
+                logging.exception("Callback acknowledgement failed")
 
             data["message"] = {
-                "chat": {"id": cb_chat["id"]},
+                "chat": {"id": cb_chat_id},
                 "text": cb_data,
                 "from": cb_from
             }
@@ -123,29 +162,39 @@ async def webhook(shop_id: str, request: Request):
         msg = data.get("message") or edited_message
         if not msg:
             return {"ok": True}
+        if not isinstance(msg, dict):
+            logging.warning("Webhook message payload is not an object")
+            return {"ok": True}
 
-        chat_id = msg.get("chat", {}).get("id")
-        if not chat_id:
+        chat = msg.get("chat", {})
+        if not isinstance(chat, dict):
+            logging.warning("Webhook chat payload is not an object")
+            return {"ok": True}
+        chat_id = chat.get("id")
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool) or not chat_id:
             return {"ok": True}
 
         # Edited Telegram messages are not replayed as new customer answers. Acknowledge
         # them explicitly so the customer can resend the correction as a new message.
         if edited_message is not None:
             await send(token, chat_id, "Please send corrections as a new text message.")
-            if update_id:
-                await idempotency_service.check_and_mark(update_id)
+            if update_id is not None:
+                idempotency_claimed = False
             return {"ok": True}
 
         # Forwarded text is not a reliable answer for the active checkout state.
         if "text" in msg and (msg.get("forward_origin") or msg.get("forward_from")):
             await send(token, chat_id, "Please type your answer as a new message instead of forwarding it.")
-            if update_id:
-                await idempotency_service.check_and_mark(update_id)
+            if update_id is not None:
+                idempotency_claimed = False
             return {"ok": True}
 
         # Reject blank, emoji-only, and punctuation-only text before queueing it.
         if "text" in msg:
             user_text = msg.get("text") or ""
+            if not isinstance(user_text, str):
+                logging.warning("Webhook text payload is not a string")
+                return {"ok": True}
             if not _has_meaningful_text(user_text):
                 await send(token, chat_id, "Please type your answer using text.")
                 if update_id:
@@ -205,10 +254,14 @@ async def webhook(shop_id: str, request: Request):
                         await idempotency_service.check_and_mark(update_id)
                     return {"ok": True}
 
-                # Get the largest photo
-                file_id = msg["photo"][-1].get("file_id")
-                if not file_id:
-                    logging.warning("Photo object missing file_id")
+                # Get the largest photo only when Telegram supplied valid photo objects.
+                photo_sizes = msg["photo"]
+                if not all(isinstance(photo, dict) for photo in photo_sizes):
+                    logging.warning("Photo payload contains a non-object entry")
+                    return {"ok": True}
+                file_id = photo_sizes[-1].get("file_id")
+                if not isinstance(file_id, str) or not file_id:
+                    logging.warning("Photo object missing valid file_id")
                     return {"ok": True}
                 
                 # Get file path from Telegram
@@ -265,8 +318,8 @@ async def webhook(shop_id: str, request: Request):
         if "text" not in msg:
             logging.info(f"Received unsupported message type for chat_id {chat_id}")
             await send(token, chat_id, "I can only understand text messages right now. Please type your answer.")
-            if update_id:
-                await idempotency_service.check_and_mark(update_id)
+            if update_id is not None:
+                idempotency_claimed = False
             return {"ok": True}
 
         user_text = msg["text"]
@@ -286,13 +339,18 @@ async def webhook(shop_id: str, request: Request):
         
         await queue_manager.push("inbound_messages", payload)
 
-        if update_id:
-            await idempotency_service.check_and_mark(update_id)
+        if update_id is not None:
+            idempotency_claimed = False
 
         return {"ok": True}
 
     except HTTPException as he:
         raise he
     except Exception as e:
+        if idempotency_claimed and idempotency_service is not None and update_id is not None:
+            try:
+                await idempotency_service.release_claim(update_id)
+            except Exception:
+                logging.exception("Failed to release webhook idempotency claim")
         logging.error(f"🔥 Webhook Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")

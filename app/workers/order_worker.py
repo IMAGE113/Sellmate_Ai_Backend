@@ -55,7 +55,14 @@ async def run_worker():
     monitor = WorkerMonitor(WorkerMonitorRepository(pool, "SYSTEM"))
     last_recovery = 0
 
+    async def safely_fail(manager, task_id, error, can_retry=True):
+        try:
+            await manager.fail(task_id, error, can_retry=can_retry)
+        except Exception:
+            logging.exception("Failed to update queue task %s after worker error", task_id)
+
     while True:
+        task = None
         try:
             # Run recovery periodically (every 60 seconds)
             current_time = asyncio.get_event_loop().time()
@@ -104,7 +111,7 @@ async def run_worker():
                         reply_text = get_script("RATE_LIMIT_EXCEEDED")
                         await send(biz_raw["tg_bot_token"], chat_id, reply_text)
                 
-                await queue_manager.fail(task["id"], str(e), can_retry=False)
+                await safely_fail(queue_manager, task["id"], str(e), can_retry=False)
                 continue
 
             lock_repo = LockRepository(pool, shop_id)
@@ -119,7 +126,7 @@ async def run_worker():
                 await asyncio.sleep(0.1)
 
             if not lock_acquired:
-                await queue_manager.fail(task["id"], "Lock acquisition failed after retries", can_retry=True)
+                await safely_fail(queue_manager, task["id"], "Lock acquisition failed after retries", can_retry=True)
                 continue
 
             try:
@@ -131,7 +138,7 @@ async def run_worker():
 
                 biz_raw = await merchant_repo.get_merchant_by_shop_id()
                 if not biz_raw:
-                    await queue_manager.fail(task["id"], f"Merchant {shop_id} not found", can_retry=False)
+                    await safely_fail(queue_manager, task["id"], f"Merchant {shop_id} not found", can_retry=False)
                     continue
                 
                 biz = dict(biz_raw)
@@ -147,7 +154,7 @@ async def run_worker():
 
                 if biz.get("is_human_takeover_active"):
                     # Bug Fix: Handle human takeover flow by notifying user instead of silent discard
-                    reply_text = flow.get_response("HUMAN_TAKEOVER", biz["name"])
+                    reply_text = FlowManager(biz, {}).get_response("HUMAN_TAKEOVER", biz["name"])
                     await send(biz["tg_bot_token"], chat_id, reply_text)
                     await queue_manager.complete(task["id"])
                     continue
@@ -366,16 +373,7 @@ async def run_worker():
                                 break
                         
                         if all_stock_available:
-                            # The conditional UPDATEs run in one transaction; a concurrent
-                            # order cannot oversell stock, and a failed item rolls back all deductions.
-                            all_stock_available = await product_repo.deduct_stock_batch(
-                                list(deductions_by_product.items())
-                            )
-                            if not all_stock_available:
-                                status_key = "OUT_OF_STOCK"
-                                reply_context = {"product_name": "", "available_stock": 0}
-
-                        if all_stock_available:
+                            deductions = list(deductions_by_product.items())
                             new_extracted_data["inventory_reservations"] = [
                                 {"product_id": product_id, "qty": quantity}
                                 for product_id, quantity in deductions_by_product.items()
@@ -384,19 +382,34 @@ async def run_worker():
                             order_num = await generate_order_number(pool)
                             new_extracted_data["is_finalized"] = True
                             new_extracted_data["order_number"] = order_num
-                            
-                            # BUG-29: Use order_service.update_status for completion
-                            await order_repo.execute(
-                                "UPDATE orders SET extracted_data = $1, order_number = $2 WHERE id = $3",
-                                json.dumps(new_extracted_data), order_num, order["id"]
+
+                            # Inventory, order metadata, status, and audit are committed atomically.
+                            finalized = await order_repo.finalize_order_with_inventory(
+                                order["id"], new_extracted_data, order_num, deductions
                             )
-                            await order_service.update_status(order["id"], "COMPLETED", "bot", f"Order confirmed: {order_num}")
-                            reply_context["order_id"] = order_num
-                        else:
+                            if not finalized:
+                                status_key = "OUT_OF_STOCK"
+                                reply_context = {"product_name": "", "available_stock": 0}
+                            else:
+                                # Preserve the existing service hook; same-status is a no-op after
+                                # the atomic helper has committed the COMPLETED state.
+                                await order_service.update_status(
+                                    order["id"], "COMPLETED", "bot", f"Order confirmed: {order_num}"
+                                )
+                                reply_context["order_id"] = order_num
+                        if not all_stock_available or status_key == "OUT_OF_STOCK":
                             await order_service.update_status(order["id"], status_key, "bot", f"Failed: {status_key}")
 
                 elif status_key == "ORDER_CANCELLED":
                     await order_service.update_status(order["id"], "CANCELLED", "bot", "Cancelled by user")
+                elif status_key == "HUMAN_TAKEOVER":
+                    await merchant_repo.set_human_takeover(True)
+                    await audit_repo.log_event(
+                        event_type="HUMAN_TAKEOVER_START",
+                        actor_source="bot",
+                        description="User requested human",
+                        order_id=order["id"],
+                    )
 
                 # 6. Generate & Send Response
                 if status_key == "ORDER_SUMMARY":
@@ -437,7 +450,7 @@ async def run_worker():
         except Exception as e:
             logging.error(f"🔥 Worker Error: {str(e)}", exc_info=True)
             if 'task' in locals() and task:
-                await queue_manager.fail(task["id"], str(e))
+                await safely_fail(queue_manager, task["id"], str(e))
             await asyncio.sleep(2)
         
         await asyncio.sleep(0.1)

@@ -14,10 +14,12 @@ class TestBatch2Bugs(unittest.TestCase):
         norm = ai_service.normalize_extracted_data(data)
         self.assertEqual(len(norm["items"]), 0)
         
-        # BUG-13: Decimals should be preserved
+        # Obsolete contract: products.stock is INTEGER, and a real PostgreSQL
+        # finalization reproduced fractional stock rounding. Reject fractions
+        # before they reach the workflow or inventory transaction.
         data = {"items": [{"name": "rice", "qty": 2.5}]}
         norm = ai_service.normalize_extracted_data(data)
-        self.assertEqual(norm["items"][0]["qty"], 2.5)
+        self.assertEqual(norm["items"], [])
         
         # Invalid string to 1.0
         data = {"items": [{"name": "apple", "qty": "a lot"}]}

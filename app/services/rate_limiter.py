@@ -10,12 +10,20 @@ class RateLimiter:
     In-memory rate limiter (SaaS soft limits).
     For a distributed production environment, this should use Redis.
     """
+    MAX_KEYS = 10000
+
     def __init__(self):
         self.limits = {} # {key: (count, reset_time)}
 
     def check_limit(self, key: str, limit: int, window_seconds: int) -> Tuple[bool, int]:
         now = time.time()
         if key not in self.limits:
+            expired = [stored_key for stored_key, (_, reset_time) in self.limits.items() if now > reset_time]
+            for stored_key in expired:
+                self.limits.pop(stored_key, None)
+            if len(self.limits) >= self.MAX_KEYS:
+                oldest_key = min(self.limits, key=lambda stored_key: self.limits[stored_key][1])
+                self.limits.pop(oldest_key, None)
             self.limits[key] = (1, now + window_seconds)
             return True, limit - 1
 

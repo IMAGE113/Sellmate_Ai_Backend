@@ -15,6 +15,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.workers.order_worker import run_worker
 from app.workers.notification_worker import run_notification_worker
 from app.workers.cleanup_worker import run_cleanup_worker
+from app.services.ai import http_client as ai_http_client
+from app.services.telegram import http_client as telegram_http_client
 
 # Configure Logging
 logging.basicConfig(
@@ -47,6 +49,11 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(order_worker_task, notification_worker_task, cleanup_worker_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
+    await asyncio.gather(
+        ai_http_client.aclose(),
+        telegram_http_client.aclose(),
+        return_exceptions=True,
+    )
     await close_db_pool()
 
 class CorrelationMiddleware(BaseHTTPMiddleware):

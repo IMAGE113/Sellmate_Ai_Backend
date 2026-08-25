@@ -90,6 +90,7 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
         self.mock_request = AsyncMock()
         self.mock_request.json.return_value = {}
         self.mock_idempotency_repo.is_processed.return_value = False
+        self.mock_idempotency_service.check_and_mark.return_value = False
 
     # Test for webhook_receiver (text message)
     async def test_webhook_text_message(self):
@@ -98,12 +99,13 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
             "message": {"chat": {"id": 456}, "text": "Hello"}
         }
         self.mock_idempotency_repo.is_processed.return_value = False
+        self.mock_idempotency_service.check_and_mark.return_value = False
         self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
         self.mock_queue_manager.push.return_value = None
 
         response = await webhook("shop1", self.mock_request)
         self.assertEqual(response, {"ok": True})
-        self.mock_idempotency_repo.is_processed.assert_called_once_with(123)
+        self.mock_idempotency_service.check_and_mark.assert_called_once_with(123)
         self.mock_merchant_repo.get_merchant_by_shop_id.assert_called_once_with()
         self.mock_queue_manager.push.assert_called_once()
 
@@ -136,15 +138,74 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
         self.mock_audit_repo.log_event.assert_called_once()
         self.mock_queue_manager.push.assert_called_once()
 
-    # Test for webhook_receiver (duplicate update_id)
-    async def test_webhook_duplicate_update_id(self):
-        self.mock_request.json.return_value = {"update_id": 125, "message": {"chat": {"id": 458}, "text": "Duplicate"}}
-        self.mock_idempotency_repo.is_processed.return_value = True
+    async def test_webhook_callback_ack_failure_is_nonfatal(self):
+        self.mock_request.json.return_value = {
+            "update_id": 131,
+            "callback_query": {
+                "id": "callback-1",
+                "message": {"chat": {"id": 462}},
+                "data": "confirm",
+            },
+        }
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.post = AsyncMock(side_effect=TimeoutError("telegram timeout"))
+        with patch("app.api.webhook.httpx.AsyncClient", return_value=client):
+            response = await webhook("shop1", self.mock_request)
+        self.assertEqual(response, {"ok": True})
+        self.mock_queue_manager.push.assert_called_once()
+
+    async def test_webhook_malformed_photo_entry_is_acknowledged(self):
+        self.mock_request.json.return_value = {
+            "update_id": 130,
+            "message": {"chat": {"id": 461}, "photo": [1]},
+        }
+        self.mock_idempotency_repo.is_processed.return_value = False
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
+        self.mock_order_service.get_or_create_active_order.return_value = {
+            "id": 103,
+            "extracted_data": {"payment_method": "Prepaid"},
+        }
 
         response = await webhook("shop1", self.mock_request)
         self.assertEqual(response, {"ok": True})
-        self.mock_idempotency_repo.is_processed.assert_called_once_with(125)
-        self.mock_merchant_repo.get_merchant_by_shop_id.assert_not_called()
+        self.mock_telegram_service.get_file_path.assert_not_called()
+        self.mock_s3_service.upload_file.assert_not_called()
+        self.mock_queue_manager.push.assert_not_called()
+
+    # Test for webhook_receiver (duplicate update_id)
+    async def test_webhook_duplicate_update_id(self):
+        self.mock_request.json.return_value = {"update_id": 125, "message": {"chat": {"id": 458}, "text": "Duplicate"}}
+        self.mock_idempotency_service.check_and_mark.return_value = True
+
+        response = await webhook("shop1", self.mock_request)
+        self.assertEqual(response, {"ok": True})
+        self.mock_idempotency_service.check_and_mark.assert_called_once_with(125)
+        self.mock_merchant_repo.get_merchant_by_shop_id.assert_called_once_with()
+
+    async def test_webhook_malformed_message_object_is_acknowledged(self):
+        self.mock_request.json.return_value = {"update_id": 128, "message": 7}
+        self.mock_idempotency_repo.is_processed.return_value = False
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
+
+        response = await webhook("shop1", self.mock_request)
+        self.assertEqual(response, {"ok": True})
+        self.mock_queue_manager.push.assert_not_called()
+
+    async def test_webhook_invalid_update_id_is_acknowledged(self):
+        for update_id in ("abc", 9223372036854775808):
+            self.mock_request.json.return_value = {"update_id": update_id}
+            response = await webhook("shop1", self.mock_request)
+            self.assertEqual(response, {"ok": True})
+        self.mock_get_db_pool.assert_not_awaited()
+
+    async def test_webhook_non_object_callback_is_acknowledged(self):
+        self.mock_request.json.return_value = {"update_id": 129, "callback_query": 5}
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {"id": 1, "tg_bot_token": "token"}
+        response = await webhook("shop1", self.mock_request)
+        self.assertEqual(response, {"ok": True})
 
     # Test for webhook_receiver (merchant not found)
     async def test_webhook_merchant_not_found(self):
@@ -156,11 +217,12 @@ class TestWebhookApiHandling(unittest.IsolatedAsyncioTestCase):
             await webhook("shop_unknown", self.mock_request)
         # It now correctly raises 404
         self.assertEqual(cm.exception.status_code, 404)
+        self.mock_idempotency_service.check_and_mark.assert_not_awaited()
 
     # Test for webhook_receiver (internal server error)
     async def test_webhook_internal_server_error(self):
         self.mock_request.json.return_value = {"update_id": 127, "message": {"chat": {"id": 460}, "text": "Error"}}
-        self.mock_idempotency_repo.is_processed.side_effect = Exception("DB Error")
+        self.mock_idempotency_service.check_and_mark.side_effect = Exception("DB Error")
 
         with self.assertRaises(HTTPException) as cm:
             await webhook("shop1", self.mock_request)

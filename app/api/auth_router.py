@@ -67,17 +67,36 @@ async def get_current_merchant(authorization: Optional[str] = Header(None)):
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid authorization scheme")
+        if len(token) > 4096:
+            raise HTTPException(status_code=401, detail="Invalid token")
         
         payload = AuthService.verify_jwt_token(token)
         if not payload:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
+        required_claims = ("shop_id", "business_id", "phone")
+        if not all(payload.get(claim) is not None for claim in required_claims):
+            raise HTTPException(status_code=401, detail="Invalid token claims")
+        if (
+            not isinstance(payload["shop_id"], str)
+            or not isinstance(payload["business_id"], int)
+            or isinstance(payload["business_id"], bool)
+            or not isinstance(payload["phone"], str)
+        ):
+            raise HTTPException(status_code=401, detail="Invalid token claims")
         
-        # Verify merchant status (Multi-tenancy protection)
+        # Verify merchant status and bind all identity claims to the database row.
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            status = await conn.fetchval("SELECT status FROM businesses WHERE shop_id = $1", payload["shop_id"])
-            if status != "ACTIVE":
-                raise HTTPException(status_code=403, detail=f"Merchant account is {status}")
+            merchant = await conn.fetchrow(
+                "SELECT id, phone, status FROM businesses WHERE shop_id = $1",
+                payload["shop_id"],
+            )
+            if not merchant:
+                raise HTTPException(status_code=401, detail="Invalid token identity")
+            if merchant["id"] != payload["business_id"] or merchant["phone"] != payload["phone"]:
+                raise HTTPException(status_code=401, detail="Invalid token identity")
+            if merchant["status"] != "ACTIVE":
+                raise HTTPException(status_code=403, detail=f"Merchant account is {merchant['status']}")
 
         return payload
     except ValueError:
@@ -204,9 +223,11 @@ async def get_merchant_by_id(shop_id: str):
             "id": merchant["id"],
             "shop_id": merchant["shop_id"],
             "name": merchant["name"],
-            "owner_name": merchant["owner_name"],
-            "phone": merchant["phone"],
-            "requirements": merchant.get("requirements", "")
+            # The public lookup is used for storefront metadata; never expose
+            # merchant PII that is only needed by authenticated dashboard users.
+            "owner_name": "",
+            "phone": "",
+            "requirements": ""
         }
         
     except HTTPException:

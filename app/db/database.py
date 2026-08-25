@@ -1,5 +1,6 @@
 import asyncpg
 import asyncio
+import math
 import os
 import json
 from typing import Any, Dict, List, Optional
@@ -30,12 +31,19 @@ async def init_db(pool):
         async with pool.acquire() as conn:
             # Task 1 Fix: Backfill columns BEFORE schema.sql to avoid UndefinedColumnError on existing tables
             await conn.execute("""
-                ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(50);
-                ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50) UNIQUE;
-                ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE;
-                ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
-                ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
-                ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(20) UNIQUE;
+                ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS sku VARCHAR(50) UNIQUE;
+                ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS variant_of_id INTEGER REFERENCES products(id) ON DELETE CASCADE;
+                ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
+                ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(20) UNIQUE;
+                CREATE TABLE IF NOT EXISTS processed_webhooks (
+                    update_id BIGINT NOT NULL,
+                    shop_id VARCHAR(50) NOT NULL,
+                    processed_at TIMESTAMP DEFAULT NOW()
+                );
+                ALTER TABLE processed_webhooks DROP CONSTRAINT IF EXISTS processed_webhooks_pkey;
+                ALTER TABLE processed_webhooks ADD CONSTRAINT processed_webhooks_pkey PRIMARY KEY (shop_id, update_id);
             """)
             
             try:
@@ -44,8 +52,12 @@ async def init_db(pool):
                 import logging
                 logging.error("Schema initialization failed: %s", e)
                 raise
-            # Separate index creation to avoid issues if column doesn't exist yet in a single transaction block
+            # Separate index creation to avoid issues if column doesn't exist yet in a single transaction block.
+            # Enforce schema-declared uniqueness for legacy tables where ADD COLUMN IF NOT EXISTS
+            # does not add a constraint to an already-existing column.
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);")
+            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS products_sku_key ON products(sku) WHERE sku IS NOT NULL;")
+            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_order_number_key ON orders(order_number) WHERE order_number IS NOT NULL;")
 
 class BaseRepository:
     def __init__(self, pool: asyncpg.Pool, shop_id: str):
@@ -94,6 +106,87 @@ class OrderRepository(BaseRepository):
             RETURNING *
         """
         return await self.fetch_one(query, business_id, self.shop_id, chat_id)
+
+    async def finalize_order_with_inventory(
+        self,
+        order_id: int,
+        extracted_data: Dict[str, Any],
+        order_number: str,
+        deductions: List[tuple[int, Any]],
+    ) -> bool:
+        """Finalize an order and deduct all inventory in one PostgreSQL transaction."""
+        aggregated: Dict[int, int] = {}
+        for product_id, quantity in deductions:
+            if isinstance(quantity, bool):
+                return False
+            try:
+                quantity = float(quantity)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(quantity) or quantity <= 0 or not quantity.is_integer():
+                return False
+            quantity = int(quantity)
+            aggregated[product_id] = aggregated.get(product_id, 0) + quantity
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for product_id, quantity in aggregated.items():
+                    row = await conn.fetchrow(
+                        "SELECT stock FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE",
+                        product_id,
+                        self.shop_id,
+                    )
+                    if row is None or row["stock"] < quantity:
+                        return False
+
+                for product_id, quantity in aggregated.items():
+                    result = await conn.execute(
+                        "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3",
+                        quantity,
+                        product_id,
+                        self.shop_id,
+                    )
+                    if result != "UPDATE 1":
+                        raise RuntimeError("Inventory update failed during order finalization")
+
+                result = await conn.execute(
+                    """
+                    UPDATE orders
+                    SET extracted_data = $1,
+                        order_number = $2,
+                        status = 'COMPLETED',
+                        timeline = timeline || jsonb_build_object(
+                            'timestamp', CURRENT_TIMESTAMP,
+                            'status', 'COMPLETED',
+                            'actor', 'bot',
+                            'description', $3::text
+                        ),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4 AND shop_id = $5 AND status <> 'COMPLETED'
+                    """,
+                    json.dumps(extracted_data),
+                    order_number,
+                    f"Order confirmed: {order_number}",
+                    order_id,
+                    self.shop_id,
+                )
+                if result != "UPDATE 1":
+                    raise ValueError("Order finalization failed")
+
+                await conn.execute(
+                    """
+                    INSERT INTO audit_logs
+                        (business_id, shop_id, order_id, event_type, description, actor_source, details)
+                    SELECT business_id, shop_id, $1, 'ORDER_STATUS_CHANGE', $2, 'bot', $3::jsonb
+                    FROM orders
+                    WHERE id = $1 AND shop_id = $4
+                    """,
+                    order_id,
+                    f"Order confirmed: {order_number}",
+                    json.dumps({"old_status": "ORDER_SUMMARY", "new_status": "COMPLETED"}),
+                    self.shop_id,
+                )
+        return True
 
     async def update_order_status(self, order_id: int, status: str, actor: str, description: str):
         query = """
@@ -145,21 +238,31 @@ class ProductRepository(BaseRepository):
         return await self.fetch_one(query, product_name, self.shop_id, json.dumps(attributes))
 
     async def update_product_stock(self, product_id: int, quantity: int) -> None:
-        if quantity <= 0:
-            raise ValueError("Stock deduction quantity must be positive")
+        if isinstance(quantity, bool):
+            raise ValueError("Stock deduction quantity must be a positive integer")
+        try:
+            numeric_quantity = float(quantity)
+        except (TypeError, ValueError):
+            raise ValueError("Stock deduction quantity must be a positive integer")
+        if not math.isfinite(numeric_quantity) or numeric_quantity <= 0 or not numeric_quantity.is_integer():
+            raise ValueError("Stock deduction quantity must be a positive integer")
+        quantity = int(numeric_quantity)
         query = "UPDATE products SET stock = stock - $1 WHERE id = $2 AND shop_id = $3 AND stock >= $1"
         await self.execute(query, quantity, product_id, self.shop_id)
 
     async def deduct_stock_batch(self, deductions: List[tuple[int, Any]]) -> bool:
         """Deduct all requested stock atomically, refusing invalid quantities and oversell."""
-        aggregated: Dict[int, Any] = {}
+        aggregated: Dict[int, int] = {}
         for product_id, quantity in deductions:
+            if isinstance(quantity, bool):
+                return False
             try:
                 quantity = float(quantity)
             except (TypeError, ValueError):
                 return False
-            if quantity <= 0:
+            if not math.isfinite(quantity) or quantity <= 0 or not quantity.is_integer():
                 return False
+            quantity = int(quantity)
             aggregated[product_id] = aggregated.get(product_id, 0) + quantity
 
         async with self.pool.acquire() as conn:
@@ -183,14 +286,17 @@ class ProductRepository(BaseRepository):
         return True
 
     async def restore_stock_batch(self, restorations: List[tuple[int, Any]]) -> bool:
-        aggregated: Dict[int, Any] = {}
+        aggregated: Dict[int, int] = {}
         for product_id, quantity in restorations:
+            if isinstance(quantity, bool):
+                return False
             try:
                 quantity = float(quantity)
             except (TypeError, ValueError):
                 return False
-            if quantity <= 0:
+            if not math.isfinite(quantity) or quantity <= 0 or not quantity.is_integer():
                 return False
+            quantity = int(quantity)
             aggregated[product_id] = aggregated.get(product_id, 0) + quantity
         async with self.pool.acquire() as conn:
             async with conn.transaction():

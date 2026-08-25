@@ -11,16 +11,26 @@ async def run_notification_worker():
         try:
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
-                    SELECT n.*, b.tg_bot_token
-                    FROM notifications n
-                    JOIN businesses b ON n.business_id = b.id
-                    WHERE n.status IN ('PENDING', 'RETRYING')
-                    AND n.retry_count < 5
-                    AND (
-                        n.updated_at IS NULL
-                        OR n.updated_at < NOW() - (POWER(2, n.retry_count) * INTERVAL '1 minute')
+                    WITH candidates AS (
+                        SELECT n.id
+                        FROM notifications n
+                        WHERE n.status IN ('PENDING', 'RETRYING')
+                        AND n.retry_count < 5
+                        AND (
+                            n.updated_at IS NULL
+                            OR n.updated_at < NOW() - (POWER(2, n.retry_count) * INTERVAL '1 minute')
+                        )
+                        ORDER BY n.created_at ASC
+                        LIMIT 10
+                        FOR UPDATE SKIP LOCKED
                     )
-                    LIMIT 10
+                    UPDATE notifications n
+                    SET updated_at = NOW()
+                    FROM candidates c
+                    JOIN notifications source_n ON source_n.id = c.id
+                    JOIN businesses b ON source_n.business_id = b.id
+                    WHERE n.id = c.id
+                    RETURNING n.*, b.tg_bot_token
                 """)
 
                 for row in rows:

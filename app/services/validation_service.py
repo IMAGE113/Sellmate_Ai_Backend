@@ -126,9 +126,13 @@ class ValidationService:
     @staticmethod
     def validate_quantity(qty: Any) -> bool:
         try:
+            if isinstance(qty, bool):
+                return False
+            if isinstance(qty, float) and not qty.is_integer():
+                return False
             val = int(qty)
-            return val > 0
-        except (ValueError, TypeError):
+            return val > 0 and (not isinstance(qty, str) or str(val) == qty.strip())
+        except (ValueError, TypeError, OverflowError):
             return False
 
     @staticmethod

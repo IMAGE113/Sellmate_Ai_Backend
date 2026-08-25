@@ -160,6 +160,7 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
         self.mock_FlowManager_class.return_value = mock_flow_manager_instance2
         self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
         self.mock_product_repo.deduct_stock_batch.return_value = True
+        self.mock_order_repo.finalize_order_with_inventory.return_value = True
         self.order_service.update_status = AsyncMock(return_value=None)
 
         with patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep_inner:
@@ -169,7 +170,8 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        self.mock_product_repo.deduct_stock_batch.assert_called_once()
+        self.mock_product_repo.deduct_stock_batch.assert_not_called()
+        self.mock_order_repo.finalize_order_with_inventory.assert_awaited_once()
         self.order_service.update_status.assert_called_with(101, "COMPLETED", "bot", unittest.mock.ANY)
 
     @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
@@ -241,6 +243,44 @@ class TestStockDeduction(unittest.IsolatedAsyncioTestCase):
 
         self.mock_product_repo.deduct_stock_batch.assert_not_called()
         self.order_service.update_status.assert_called_with(101, "OUT_OF_STOCK", "bot", "Failed: OUT_OF_STOCK")
+
+    @patch("app.workers.order_worker.asyncio.sleep", new_callable=AsyncMock)
+    async def test_post_deduction_failure_restores_stock(self, mock_sleep):
+        self.mock_queue_manager.pop.side_effect = [
+            {"id": "task1", "shop_id": "shop_id_1", "payload": "{\"chat_id\": 123, \"data\": {\"user_text\": \"Order 2 apples\"}}"},
+            None,
+        ]
+        self.mock_lock_manager.acquire.return_value = True
+        self.mock_merchant_repo.get_merchant_by_shop_id.return_value = {
+            "id": 1, "shop_id": "shop_id_1", "name": "Test Shop",
+            "tg_bot_token": "token", "is_human_takeover_active": False,
+        }
+        self.order_service.get_or_create_active_order = AsyncMock(return_value={
+            "id": 101, "status": "ORDER_SUMMARY",
+            "extracted_data": {"items": [{"name": "apple", "qty": 2}]},
+        })
+        self.mock_ai_parser.parse_message.return_value = {"intent": "ORDER"}
+        self.mock_ai.merge_data.return_value = {"items": [{"name": "apple", "qty": 2}]}
+        flow = MagicMock()
+        flow._is_reset_command.return_value = False
+        flow.get_current_state.return_value = "ORDER_SUMMARY"
+        flow.get_next_step.return_value = "ORDER_CONFIRMED"
+        flow.get_response.return_value = "confirmed"
+        self.mock_FlowManager_class.return_value = flow
+        self.mock_product_repo.get_product_by_name.return_value = {"id": 1, "name": "apple", "stock": 10}
+        self.mock_product_repo.deduct_stock_batch.return_value = True
+        self.mock_product_repo.restore_stock_batch.return_value = True
+        self.mock_order_repo.finalize_order_with_inventory.side_effect = RuntimeError("finalization failed")
+        self.order_service.update_status = AsyncMock(return_value=None)
+        mock_sleep.side_effect = [None, asyncio.CancelledError]
+
+        try:
+            await run_worker()
+        except asyncio.CancelledError:
+            pass
+
+        self.mock_order_repo.finalize_order_with_inventory.assert_awaited_once()
+        self.mock_product_repo.restore_stock_batch.assert_not_awaited()
 
 if __name__ == "__main__":
     unittest.main()

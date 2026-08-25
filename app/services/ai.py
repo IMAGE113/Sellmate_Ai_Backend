@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import httpx
 import re
 import logging
@@ -125,8 +126,9 @@ MENU: {json.dumps(menu, ensure_ascii=False)}
                         qty_raw = item.get("qty", 1)
                         try:
                             qty = float(qty_raw)
-                            # BUG-12, BUG-14: Reject non-positive quantities
-                            if qty <= 0: continue
+                            # Reject quantities that cannot represent discrete inventory units.
+                            if not math.isfinite(qty) or qty <= 0 or not qty.is_integer():
+                                continue
                         except (ValueError, TypeError):
                             qty = 1.0
                             

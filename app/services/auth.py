@@ -4,6 +4,7 @@ Handles merchant registration, login, and session management
 """
 
 import hashlib
+import logging
 import secrets
 import asyncpg
 from datetime import datetime, timedelta
@@ -156,8 +157,9 @@ class AuthService:
                 else:
                     return False, {"error": "Failed to create business"}
                     
-        except Exception as e:
-            return False, {"error": f"Registration failed: {str(e)}"}
+        except Exception:
+            logging.exception("Merchant registration failed")
+            return False, {"error": "Registration failed"}
     
     @staticmethod
     async def login_merchant(
@@ -212,8 +214,9 @@ class AuthService:
                     "requirements": business["requirements_text"] or ""
                 }
                 
-        except Exception as e:
-            return False, {"error": f"Login failed: {str(e)}"}
+        except Exception:
+            logging.exception("Merchant login failed")
+            return False, {"error": "Login failed"}
     
     @staticmethod
     async def get_merchant_by_shop_id(pool: asyncpg.Pool, shop_id: str) -> Optional[Dict]:
@@ -238,8 +241,8 @@ class AuthService:
                         "id": merchant["id"],
                         "shop_id": merchant["shop_id"],
                         "name": merchant["name"],
-                        "owner_name": merchant["owner_name"],
-                        "phone": merchant["phone"],
+                        "owner_name": merchant["owner_name"] or "",
+                        "phone": merchant["phone"] or "",
                         "requirements": merchant["requirements_text"] or ""
                     }
                 return None

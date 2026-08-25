@@ -99,9 +99,10 @@ CREATE TABLE IF NOT EXISTS conversation_locks (
 
 -- 7. Idempotency (Processed Webhooks)
 CREATE TABLE IF NOT EXISTS processed_webhooks (
-    update_id BIGINT PRIMARY KEY,
+    update_id BIGINT NOT NULL,
     shop_id VARCHAR(50) NOT NULL,
-    processed_at TIMESTAMP DEFAULT NOW()
+    processed_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (shop_id, update_id)
 );
 
 -- 8. Merchant Scripts (Custom Responses)

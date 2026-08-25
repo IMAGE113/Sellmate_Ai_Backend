@@ -7,8 +7,12 @@ class RecoveryValidationRepository(BaseRepository):
         """Identify orders stuck in processing without a worker or heartbeat."""
         query = """
             SELECT o.* FROM orders o
-            JOIN task_queue t ON o.id = (t.payload->>'order_id')::int
-            WHERE t.status = 'processing' 
+            JOIN task_queue t ON o.id = CASE
+                WHEN t.payload->>'order_id' ~ '^[0-9]+$'
+                THEN (t.payload->>'order_id')::int
+                ELSE NULL
+            END
+            WHERE t.status = 'processing'
             AND t.heartbeat < NOW() - INTERVAL '5 minutes'
         """
         return await self.fetch_all(query)

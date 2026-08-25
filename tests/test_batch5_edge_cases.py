@@ -45,7 +45,7 @@ class TestBatch5EdgeCases(unittest.IsolatedAsyncioTestCase):
                  patch.object(webhook_module, "send", new=AsyncMock()) as send_mock:
                 merchant_cls.return_value.get_merchant_by_shop_id = AsyncMock(return_value={"tg_bot_token": "token"})
                 idem_repo_cls.return_value.is_processed = AsyncMock(return_value=False)
-                idem_service_cls.return_value.check_and_mark = AsyncMock()
+                idem_service_cls.return_value.check_and_mark = AsyncMock(return_value=False)
                 result = await webhook_module.webhook("shop", request)
                 self.assertEqual(result, {"ok": True})
                 send_mock.assert_awaited_once()
@@ -62,7 +62,7 @@ class TestBatch5EdgeCases(unittest.IsolatedAsyncioTestCase):
                  patch.object(webhook_module, "send", new=AsyncMock()) as send_mock:
             merchant_cls.return_value.get_merchant_by_shop_id = AsyncMock(return_value={"tg_bot_token": "token"})
             idem_repo_cls.return_value.is_processed = AsyncMock(return_value=False)
-            idem_service_cls.return_value.check_and_mark = AsyncMock()
+            idem_service_cls.return_value.check_and_mark = AsyncMock(return_value=False)
             result = await webhook_module.webhook("shop", request)
             self.assertEqual(result, {"ok": True})
             self.assertIn("text messages", send_mock.await_args.args[2])
@@ -84,7 +84,7 @@ class TestBatch5EdgeCases(unittest.IsolatedAsyncioTestCase):
 
             merchant_cls.return_value.get_merchant_by_shop_id = AsyncMock(return_value={"id": 1, "tg_bot_token": "token"})
             idem_repo_cls.return_value.is_processed = AsyncMock(return_value=False)
-            idem_service_cls.return_value.check_and_mark = AsyncMock()
+            idem_service_cls.return_value.check_and_mark = AsyncMock(return_value=False)
             order_service_cls.return_value.get_or_create_active_order = AsyncMock(return_value={"id": 1, "extracted_data": {"payment_method": "COD"}})
             lock_cls.return_value.acquire = AsyncMock(return_value=True)
             lock_cls.return_value.release = AsyncMock()

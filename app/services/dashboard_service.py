@@ -61,8 +61,22 @@ class DashboardRepository(BaseRepository):
                 WHERE shop_id = $1 AND status NOT IN ('CANCELLED', 'FAILED', 'OUT_OF_STOCK')
             ),
             top_product AS (
-                SELECT item->>'name' as product_name, SUM((item->>'qty')::int) as total_sold
-                FROM orders, jsonb_array_elements(extracted_data->'items') as item
+                SELECT item->>'name' as product_name,
+                       SUM(
+                           CASE
+                               WHEN item->>'qty' ~ '^[0-9]+(\\.[0-9]+)?$'
+                               THEN (item->>'qty')::numeric
+                               ELSE 0
+                           END
+                       ) as total_sold
+                FROM orders,
+                     jsonb_array_elements(
+                         CASE
+                             WHEN jsonb_typeof(extracted_data->'items') = 'array'
+                             THEN extracted_data->'items'
+                             ELSE '[]'::jsonb
+                         END
+                     ) as item
                 WHERE shop_id = $1 AND status NOT IN ('CANCELLED', 'FAILED', 'OUT_OF_STOCK')
                 GROUP BY product_name
                 ORDER BY total_sold DESC
@@ -106,19 +120,21 @@ class DashboardRepository(BaseRepository):
 
     # ✅ [AUTOMATED MULTI-TENANT WEBHOOK FIX] Token သိမ်းပြီးတာနဲ့ သက်ဆိုင်ရာ /webhook/{shop_id} ဆီ အလိုအလျောက် Webhook ချိတ်ပေးမယ် ကောင်ကြီး
     async def update_merchant_settings(self, settings: Dict[str, Any]):
-        bot_token = settings.get("bot_token")
+        bot_token = None
         
-        # Defensive Validation: Ensure Telegram token format is valid
-        if bot_token:
-            import re
-            if not re.match(r"^[0-9]+:[a-zA-Z0-9_-]{35}$", bot_token):
-                logging.warning(f"Invalid Telegram token format attempted for shop_id: {self.shop_id}")
-                bot_token = None # Do not save invalid token
-        
-        # ၁။ အရင်ဆုံး ဒေတာဘေ့စ်ရဲ့ tg_bot_token ထဲ ကွက်တိ သွားသိမ်းမယ်
-        # Task 1 Fix: Also update other merchant settings if provided
-        update_fields = ["tg_bot_token = $1"]
-        params = [bot_token]
+        # Only change the token when the caller explicitly supplies it.
+        update_fields = []
+        params = []
+        if "bot_token" in settings:
+            bot_token = settings.get("bot_token")
+            # Defensive Validation: Ensure Telegram token format is valid
+            if bot_token:
+                import re
+                if not re.match(r"^[0-9]+:[a-zA-Z0-9_-]{35}$", bot_token):
+                    logging.warning(f"Invalid Telegram token format attempted for shop_id: {self.shop_id}")
+                    raise ValueError("Invalid Telegram bot token format")
+            update_fields.append("tg_bot_token = $1")
+            params.append(bot_token)
         
         if "name" in settings:
             update_fields.append(f"name = ${len(params)+1}")
@@ -137,6 +153,9 @@ class DashboardRepository(BaseRepository):
         if "workflow_config" in settings:
             update_fields.append(f"workflow_config = ${len(params)+1}")
             params.append(json.dumps(settings["workflow_config"]))
+
+        if not update_fields:
+            return
             
         params.append(self.shop_id)
         query = f"""
