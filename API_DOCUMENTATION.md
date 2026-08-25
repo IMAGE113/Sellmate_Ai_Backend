@@ -278,7 +278,8 @@ const orders = await fetch('/api/orders', { headers });
 
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/sellmate_ai
-JWT_SECRET=your-secret-key-change-in-production
+# Generate with: openssl rand -hex 32
+JWT_SECRET=<64-character-high-entropy-secret>
 JWT_EXPIRY_HOURS=24
 GROQ_API_KEY=your-groq-api-key
 LLAMA_API_KEY=your-llama-api-key
@@ -306,7 +307,7 @@ psql sellmate_ai < app/db/schema.sql
 
 ```bash
 export DATABASE_URL="postgresql://user:password@localhost:5432/sellmate_ai"
-export JWT_SECRET="your-secret-key"
+export JWT_SECRET="$(openssl rand -hex 32)"
 export GROQ_API_KEY="your-groq-api-key"
 ```
 
